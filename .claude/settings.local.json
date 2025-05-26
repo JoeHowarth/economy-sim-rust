@@ -6,7 +6,11 @@
       "Bash(cargo build:*)",
       "Bash(grep:*)",
       "Bash(cargo test:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(mkdir:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }
