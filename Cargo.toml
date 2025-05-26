@@ -12,3 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 rand = "0.9"
+rust_decimal = "1.35"
+rust_decimal_macros = "1.35"
