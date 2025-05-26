@@ -160,7 +160,7 @@ pub fn run_auction(
         let mut tentative_buy_fills_info: HashMap<ParticipantId, Vec<(OrderId, u64, Decimal)>> =
             HashMap::new();
 
-        for (_resource_id, clearing) in &iteration_clearings {
+        for clearing in iteration_clearings.values() {
             let price = clearing.clearing_price;
             for fill in &clearing.tentative_fills {
                 // Avoid repeated lookups if possible, though map lookup is fast
@@ -249,7 +249,7 @@ pub fn run_auction(
                         resource_id: resource_id.clone(),
                         order_type: order.order_type,
                         filled_quantity: fill.filled_quantity,
-                        price: price, // Already a Decimal
+                        price, // Already a Decimal
                     });
                 }
             }
@@ -374,8 +374,8 @@ pub fn run_auction(
 
 // Helper to find clearing price and tentative fills for one resource
 // Returns Result to propagate potential Decimal conversion errors
-pub fn find_clearing_for_resource<'a>(
-    orders: &[&'a Order],
+pub fn find_clearing_for_resource(
+    orders: &[&Order],
     last_price: Option<Decimal>,
     order_map: &HashMap<OrderId, Order>, // Pass map ref
 ) -> Result<Option<ResourceClearing>, String> {
@@ -439,12 +439,16 @@ pub fn find_clearing_for_resource<'a>(
         let volume = demand.min(supply);
 
         if volume > 0 {
-            if volume > max_volume {
-                max_volume = volume;
-                candidates.clear();
-                candidates.push((current_price, volume));
-            } else if volume == max_volume {
-                candidates.push((current_price, volume));
+            match volume.cmp(&max_volume) {
+                std::cmp::Ordering::Greater => {
+                    max_volume = volume;
+                    candidates.clear();
+                    candidates.push((current_price, volume));
+                }
+                std::cmp::Ordering::Equal => {
+                    candidates.push((current_price, volume));
+                }
+                std::cmp::Ordering::Less => {}
             }
         }
     }
@@ -456,21 +460,19 @@ pub fn find_clearing_for_resource<'a>(
     // --- Tie Breaking (using Decimal) ---
     if candidates.len() == 1 {
         best_price = *candidates[0].0;
+    } else if let Some(last_p) = last_price {
+        // Sort by distance to last_p, then by price descending
+        candidates.sort_unstable_by(|(p1, _), (p2, _)| {
+            (**p1 - last_p)
+                .abs()
+                .cmp(&(**p2 - last_p).abs()) // Use abs() and cmp
+                .then_with(|| p2.cmp(p1)) // Secondary: highest price
+        });
+        best_price = *candidates[0].0;
     } else {
-        if let Some(last_p) = last_price {
-            // Sort by distance to last_p, then by price descending
-            candidates.sort_unstable_by(|(p1, _), (p2, _)| {
-                (**p1 - last_p)
-                    .abs()
-                    .cmp(&(**p2 - last_p).abs()) // Use abs() and cmp
-                    .then_with(|| p2.cmp(p1)) // Secondary: highest price
-            });
-            best_price = *candidates[0].0;
-        } else {
-            // No last price, choose highest price among max volume candidates
-            candidates.sort_unstable_by(|(p1, _), (p2, _)| p2.cmp(p1)); // Sort descending by price
-            best_price = *candidates[0].0;
-        }
+        // No last price, choose highest price among max volume candidates
+        candidates.sort_unstable_by(|(p1, _), (p2, _)| p2.cmp(p1)); // Sort descending by price
+        best_price = *candidates[0].0;
     }
 
     let clearing_price = best_price;
@@ -608,8 +610,7 @@ mod tests {
             create_order(1, ALICE, "CPU", OrderType::Ask, 10, dec!(100.0), 1),
             create_order(2, BOB, "CPU", OrderType::Bid, 5, dec!(110.0), 2),
         ];
-        let participants =
-            create_participants(vec![(ALICE, dec!(1000.0)), (BOB, dec!(1000.0))]);
+        let participants = create_participants(vec![(ALICE, dec!(1000.0)), (BOB, dec!(1000.0))]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
         match result {
@@ -664,17 +665,15 @@ mod tests {
             create_order(1, ALICE, "CPU", OrderType::Ask, 10, dec!(110.0), 1),
             create_order(2, BOB, "CPU", OrderType::Bid, 5, dec!(100.0), 2),
         ];
-        let participants =
-            create_participants(vec![(ALICE, dec!(1000.0)), (BOB, dec!(1000.0))]);
+        let participants = create_participants(vec![(ALICE, dec!(1000.0)), (BOB, dec!(1000.0))]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
         match result {
             Ok(success) => {
                 assert!(
-                    success
+                    !success
                         .clearing_prices
-                        .get(&ResourceId("CPU".to_string()))
-                        .is_none()
+                        .contains_key(&ResourceId("CPU".to_string()))
                 );
                 assert!(success.final_fills.is_empty());
                 let balance_alice = success

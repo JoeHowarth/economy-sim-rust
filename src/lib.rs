@@ -29,6 +29,7 @@ impl Auction {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_order(
         &mut self,
         id: usize,

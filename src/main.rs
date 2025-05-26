@@ -1,7 +1,9 @@
 use rust_decimal::Decimal;
-use rust_decimal::prelude::{ToPrimitive, FromPrimitive};
 use rust_decimal_macros::dec;
-use village_model::{auction::{FinalFill, OrderType}, Auction};
+use village_model::{
+    Auction,
+    auction::{FinalFill, OrderType},
+};
 
 struct Village {
     id: usize,
@@ -78,14 +80,6 @@ impl Worker {
             productivity -= dec!(0.2);
         }
         productivity
-    }
-
-    fn growth_chance(&self) -> Decimal {
-        if self.days_with_both > 100 {
-            dec!(0.05)
-        } else {
-            dec!(0.0)
-        }
     }
 }
 
@@ -193,7 +187,7 @@ impl Village {
                 .truncate(self.workers.len() - workers_to_remove);
         }
         self.workers
-            .extend(std::iter::repeat(Worker::default()).take(new_workers));
+            .extend(std::iter::repeat_n(Worker::default(), new_workers));
 
         for house in self.houses.iter_mut() {
             if self.wood >= dec!(0.1) {
@@ -218,14 +212,6 @@ fn produced(slots: (u32, u32), units_per_slot: Decimal, worker_days: Decimal) ->
     let partial_slots = Decimal::from(slots.1).min(remaining_worker_days);
 
     (full_slots + partial_slots * dec!(0.5)) * units_per_slot
-}
-
-#[derive(Debug, PartialEq)]
-struct Trade {
-    ask_village_id: usize,
-    bid_village_id: usize,
-    price: Decimal,
-    quantity: Decimal,
 }
 
 fn apply_trades(_villages: &mut [Village], _fills: &[FinalFill]) {
@@ -278,7 +264,7 @@ fn main() {
 
         for village in villages.iter_mut() {
             let (allocation, bid, ask) =
-                strategy.decide_allocation_and_bids_asks(&village, &bids, &asks);
+                strategy.decide_allocation_and_bids_asks(village, &bids, &asks);
             village.update(allocation);
 
             auction.add_participant(&format!("village_{}", village.id), dec!(0.0));
@@ -312,30 +298,9 @@ fn main() {
     }
 }
 
-fn gather_bids_and_asks(
-    villages: &[Village],
-    asks: &mut Vec<(Decimal, u32, usize)>,
-    bids: &mut Vec<(Decimal, u32, usize)>,
-) {
-    asks.clear();
-    asks.extend(
-        villages
-            .iter()
-            .map(|v| (v.ask_wood_for_food.0, v.ask_wood_for_food.1, v.id)),
-    );
-    asks.sort_by_key(|(p, q, _)| ((p * dec!(1000)).to_i32().unwrap_or(0) + *q as i32));
-
-    bids.clear();
-    bids.extend(
-        villages
-            .iter()
-            .map(|v| (v.bid_wood_for_food.0, v.bid_wood_for_food.1, v.id)),
-    );
-    bids.sort_by_key(|(p, q, _)| ((-p * dec!(1000)).to_i32().unwrap_or(0) - *q as i32));
-}
-
 #[cfg(test)]
 mod tests {
+    use rust_decimal::prelude::ToPrimitive;
     use rust_decimal_macros::dec;
 
     use super::*;
@@ -349,13 +314,13 @@ mod tests {
         }
     }
 
-    // Helper to create a village with custom parameters
-    fn village_with(workers: usize, houses: usize) -> Village {
-        Village::new(0, (10, 10), (10, 10), workers, houses)
-    }
-
     // Helper to create a village with custom slots
-    fn village_with_slots(wood_slots: (u32, u32), food_slots: (u32, u32), workers: usize, houses: usize) -> Village {
+    fn village_with_slots(
+        wood_slots: (u32, u32),
+        food_slots: (u32, u32),
+        workers: usize,
+        houses: usize,
+    ) -> Village {
         Village::new(0, wood_slots, food_slots, workers, houses)
     }
 
@@ -376,36 +341,23 @@ mod tests {
     // Macro to assert worker states
     macro_rules! assert_worker_state {
         ($worker:expr, days_without_food = $dwf:expr, days_without_shelter = $dws:expr, days_with_both = $dwb:expr) => {
-            assert_eq!($worker.days_without_food, $dwf, "days_without_food mismatch");
-            assert_eq!($worker.days_without_shelter, $dws, "days_without_shelter mismatch");
+            assert_eq!(
+                $worker.days_without_food, $dwf,
+                "days_without_food mismatch"
+            );
+            assert_eq!(
+                $worker.days_without_shelter, $dws,
+                "days_without_shelter mismatch"
+            );
             assert_eq!($worker.days_with_both, $dwb, "days_with_both mismatch");
         };
-    }
-
-    fn base_village(
-        id: usize,
-        ask_wood_for_food: (Decimal, u32),
-        bid_wood_for_food: (Decimal, u32),
-    ) -> Village {
-        Village {
-            id,
-            wood: dec!(100.0),
-            food: dec!(100.0),
-            wood_slots: (10, 10),
-            food_slots: (10, 10),
-            workers: vec![],
-            houses: vec![],
-            construction_progress: dec!(0.0),
-            ask_wood_for_food,
-            bid_wood_for_food,
-        }
     }
 
     #[test]
     fn test_village_update_basic_production() {
         let mut village = village_with_slots((2, 0), (1, 0), 3, 0);
         village.update(alloc(2.0, 1.0, 0.0));
-        
+
         // Wood: 2 worker-days * 0.1 = 0.2 production
         // Food: 1 worker-day * 2.0 = 2.0 produced, 3 consumed = -1 net
         assert_resources!(village, wood = 100.2, food = 99.0);
@@ -418,7 +370,7 @@ mod tests {
 
         // With slots (1, 1) and 3 worker-days allocated to wood:
         // Full slot: 1 worker-day at 100% = 0.1 wood
-        // Partial slot: 1 worker-day at 50% = 0.05 wood  
+        // Partial slot: 1 worker-day at 50% = 0.05 wood
         // Third worker-day: wasted (no more slots)
         assert_resources!(village, wood = 100.15);
     }
@@ -426,18 +378,20 @@ mod tests {
     #[test]
     fn test_village_update_worker_states() {
         let mut village = village_with_slots((1, 0), (1, 0), 1, 1);
-        
+
         // Initial state
-        assert_worker_state!(village.workers[0], 
-            days_without_food = 0, 
-            days_without_shelter = 0, 
+        assert_worker_state!(
+            village.workers[0],
+            days_without_food = 0,
+            days_without_shelter = 0,
             days_with_both = 0
         );
 
         village.update(alloc(1.0, 0.0, 0.0));
 
         // Worker should have food and shelter (village starts with 100 food)
-        assert_worker_state!(village.workers[0],
+        assert_worker_state!(
+            village.workers[0],
             days_without_food = 0,
             days_without_shelter = 0,
             days_with_both = 1
@@ -453,7 +407,8 @@ mod tests {
         village.update(alloc(1.0, 0.0, 0.0));
 
         // Worker should be without food but still have shelter
-        assert_worker_state!(village.workers[0],
+        assert_worker_state!(
+            village.workers[0],
             days_without_food = 1,
             days_without_shelter = 0,
             days_with_both = 0
@@ -466,9 +421,9 @@ mod tests {
     fn test_house_maintenance_no_wood() {
         let mut village = village_with_slots((1, 0), (1, 0), 1, 1);
         village.wood = dec!(0.0);
-        
+
         village.update(alloc(0.0, 1.0, 0.0));
-        
+
         assert_eq!(village.houses[0].maintenance_level, dec!(-0.1));
     }
 
@@ -476,9 +431,9 @@ mod tests {
     fn test_house_maintenance_with_production() {
         let mut village = village_with_slots((2, 0), (1, 0), 2, 1);
         village.wood = dec!(0.0);
-        
+
         village.update(alloc(2.0, 0.0, 0.0));
-        
+
         // Produces 0.2 wood, uses 0.1 for maintenance
         assert_eq!(village.houses[0].maintenance_level, dec!(0.0));
         assert_resources!(village, wood = 0.1);
@@ -489,9 +444,9 @@ mod tests {
         let mut village = village_with_slots((2, 0), (1, 0), 2, 1);
         village.wood = dec!(0.0);
         village.houses[0].maintenance_level = dec!(-2.0);
-        
+
         village.update(alloc(2.0, 0.0, 0.0));
-        
+
         // Produces 0.2 wood, uses 0.1 for upkeep and 0.1 for repair
         assert_eq!(village.houses[0].maintenance_level, dec!(-1.9));
         assert_resources!(village, wood = 0.0);
@@ -502,36 +457,54 @@ mod tests {
     #[test]
     fn test_worker_death_no_shelter() {
         let mut village = village_with_slots((1, 0), (1, 0), 1, 0); // No houses
-        
+
         // Run for 30 days - worker should die on day 30
         for day in 1..=30 {
             village.update(alloc(village.worker_days().to_f64().unwrap(), 0.0, 0.0));
-            
+
             if day < 30 {
-                assert_eq!(village.workers.len(), 1, "Worker died too early on day {}", day);
+                assert_eq!(
+                    village.workers.len(),
+                    1,
+                    "Worker died too early on day {}",
+                    day
+                );
                 assert_eq!(village.workers[0].days_without_shelter, day as u32);
             }
         }
-        
-        assert_eq!(village.workers.len(), 0, "Worker should die after 30 days without shelter");
+
+        assert_eq!(
+            village.workers.len(),
+            0,
+            "Worker should die after 30 days without shelter"
+        );
     }
 
     #[test]
     fn test_worker_death_starvation() {
         let mut village = village_with_slots((1, 0), (1, 0), 1, 1);
         village.food = dec!(0.0); // No food available
-        
+
         // Run for 10 days - worker should die on day 10
         for day in 1..=10 {
             village.update(alloc(village.worker_days().to_f64().unwrap(), 0.0, 0.0));
-            
+
             if day < 10 {
-                assert_eq!(village.workers.len(), 1, "Worker died too early on day {}", day);
+                assert_eq!(
+                    village.workers.len(),
+                    1,
+                    "Worker died too early on day {}",
+                    day
+                );
                 assert_eq!(village.workers[0].days_without_food, day as u32);
             }
         }
-        
-        assert_eq!(village.workers.len(), 0, "Worker should die after 10 days without food");
+
+        assert_eq!(
+            village.workers.len(),
+            0,
+            "Worker should die after 10 days without food"
+        );
     }
 
     // REMOVED: test_village_update_worker_growth - flaky due to RNG
@@ -541,12 +514,12 @@ mod tests {
     fn test_house_construction_basic() {
         let mut village = village_with_slots((0, 0), (0, 0), 65, 0);
         village.food = dec!(1000.0); // Plenty of food
-        village.wood = dec!(20.0);   // Enough for 2 houses
-        
+        village.wood = dec!(20.0); // Enough for 2 houses
+
         // Allocate all worker days to construction
         let worker_days = village.worker_days();
         village.update(alloc(0.0, 0.0, worker_days.to_f64().unwrap()));
-        
+
         // Should have built one house (60 worker-days) using 10 wood
         assert_eq!(village.houses.len(), 1);
         assert_eq!(village.wood, dec!(9.9)); // 20 - 10 - 0.1 maintenance
@@ -559,11 +532,11 @@ mod tests {
     fn test_house_construction_insufficient_wood() {
         let mut village = village_with_slots((0, 0), (0, 0), 70, 0);
         village.wood = dec!(5.0); // Not enough wood for a house (needs 10)
-        
+
         // Allocate all worker days to construction
         let worker_days = village.worker_days();
         village.update(alloc(0.0, 0.0, worker_days.to_f64().unwrap()));
-        
+
         // Should have accumulated progress but not built a house
         assert_eq!(village.houses.len(), 0);
         assert_eq!(village.wood, dec!(5.0)); // No wood consumed

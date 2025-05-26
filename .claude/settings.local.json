@@ -10,7 +10,9 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(mkdir:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)"
     ],
     "deny": []
   }
