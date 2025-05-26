@@ -7,8 +7,18 @@ use auction::{
 use rust_decimal::Decimal;
 
 pub mod auction;
+pub mod events;
 pub mod fp;
+pub mod metrics;
 pub mod old_auction;
+pub mod scenario;
+
+#[cfg(test)]
+mod events_test;
+#[cfg(test)]
+mod metrics_test;
+#[cfg(test)]
+mod scenario_test;
 
 // Public Auction struct for use from main
 #[derive(Debug)]
@@ -40,9 +50,17 @@ impl Auction {
         price: Decimal,
         ts: u64,
     ) {
+        // Convert string participant ID to u32 by hashing
+        let p_id_num = if let Ok(num) = p_id.parse::<u32>() {
+            num
+        } else {
+            // Use a simple hash for string IDs
+            p_id.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32))
+        };
+
         let order = Order {
             id: OrderId(id),
-            participant_id: ParticipantId(p_id.parse().expect("Invalid participant ID")),
+            participant_id: ParticipantId(p_id_num),
             resource_id: ResourceId(r_id.to_string()),
             order_type,
             original_quantity: qty,
@@ -54,7 +72,17 @@ impl Auction {
     }
 
     pub fn add_participant(&mut self, id_str: &str, currency: Decimal) {
-        let id = ParticipantId(id_str.parse().expect("Invalid participant ID"));
+        // Convert string participant ID to u32 by hashing
+        let id_num = if let Ok(num) = id_str.parse::<u32>() {
+            num
+        } else {
+            // Use a simple hash for string IDs
+            id_str
+                .bytes()
+                .fold(0u32, |acc, b| acc.wrapping_add(b as u32))
+        };
+
+        let id = ParticipantId(id_num);
         let participant = Participant {
             id: id.clone(),
             currency,

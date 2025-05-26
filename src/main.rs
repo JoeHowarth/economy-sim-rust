@@ -1,14 +1,20 @@
 use rust_decimal::Decimal;
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use village_model::{
     Auction,
     auction::{FinalFill, OrderType},
+    events::{ConsumptionPurpose, DeathCause, EventLogger, EventType, ResourceType, TradeSide},
+    metrics::MetricsCalculator,
+    scenario::{VillageConfig, create_standard_scenarios},
 };
 
 struct Village {
     id: usize,
+    id_str: String,
     wood: Decimal,
     food: Decimal,
+    money: Decimal,
     wood_slots: (u32, u32),
     food_slots: (u32, u32),
     workers: Vec<Worker>,
@@ -17,9 +23,14 @@ struct Village {
 
     ask_wood_for_food: (Decimal, u32),
     bid_wood_for_food: (Decimal, u32),
+
+    // For tracking births/deaths
+    next_worker_id: usize,
+    next_house_id: usize,
 }
 
 impl Village {
+    #[allow(dead_code)]
     fn new(
         id: usize,
         wood_slots: (u32, u32),
@@ -27,23 +38,79 @@ impl Village {
         workers: usize,
         houses: usize,
     ) -> Self {
+        let workers_vec: Vec<Worker> = (0..workers)
+            .map(|i| Worker {
+                id: i,
+                days_without_food: 0,
+                days_without_shelter: 0,
+                days_with_both: 0,
+            })
+            .collect();
+
+        let houses_vec: Vec<House> = (0..houses)
+            .map(|i| House {
+                id: i,
+                maintenance_level: dec!(0.0),
+            })
+            .collect();
+
         Self {
             id,
+            id_str: format!("village_{}", id),
             wood: dec!(100.0),
             food: dec!(100.0),
+            money: dec!(100.0),
             wood_slots,
             food_slots,
-            workers: vec![Worker::default(); workers],
-            houses: vec![House::default(); houses],
+            workers: workers_vec,
+            houses: houses_vec,
             construction_progress: dec!(0.0),
             ask_wood_for_food: (dec!(0.0), 0),
             bid_wood_for_food: (dec!(0.0), 0),
+            next_worker_id: workers,
+            next_house_id: houses,
+        }
+    }
+
+    fn from_config(id: usize, config: &VillageConfig) -> Self {
+        let workers: Vec<Worker> = (0..config.initial_workers)
+            .map(|i| Worker {
+                id: i,
+                days_without_food: 0,
+                days_without_shelter: 0,
+                days_with_both: 0,
+            })
+            .collect();
+
+        let houses: Vec<House> = (0..config.initial_houses)
+            .map(|i| House {
+                id: i,
+                maintenance_level: dec!(0.0),
+            })
+            .collect();
+
+        Self {
+            id,
+            id_str: config.id.clone(),
+            wood: config.initial_wood,
+            food: config.initial_food,
+            money: config.initial_money,
+            wood_slots: (config.wood_slots.0 as u32, config.wood_slots.1 as u32),
+            food_slots: (config.food_slots.0 as u32, config.food_slots.1 as u32),
+            workers,
+            houses,
+            construction_progress: dec!(0.0),
+            ask_wood_for_food: (dec!(0.0), 0),
+            bid_wood_for_food: (dec!(0.0), 0),
+            next_worker_id: config.initial_workers,
+            next_house_id: config.initial_houses,
         }
     }
 }
 
 #[derive(Default, Clone)]
 struct Worker {
+    id: usize,
     days_without_food: u32,
     days_without_shelter: u32,
     days_with_both: u32,
@@ -51,6 +118,7 @@ struct Worker {
 
 #[derive(Default, Clone, Debug)]
 struct House {
+    id: usize,
     /// Negative means wood is still needed for full repair in whole units.
     /// Positive or zero never exceeds 5 total capacity.
     /// Decreases by 0.1 per day if unmaintained.
@@ -95,7 +163,7 @@ impl Village {
         self.workers.iter().map(|w| w.productivity()).sum()
     }
 
-    fn update(&mut self, allocation: Allocation) {
+    fn update(&mut self, allocation: Allocation, logger: &mut EventLogger, tick: usize) {
         let worker_days = self.worker_days();
         assert!(
             ((allocation.wood + allocation.food + allocation.house_construction) - worker_days)
@@ -106,8 +174,57 @@ impl Village {
             allocation
         );
 
-        self.wood += produced(self.wood_slots, dec!(0.1), allocation.wood);
-        self.food += produced(self.food_slots, dec!(2.0), allocation.food);
+        // Log worker allocation
+        let food_workers = allocation.food.to_u32().unwrap_or(0) as usize;
+        let wood_workers = allocation.wood.to_u32().unwrap_or(0) as usize;
+        let construction_workers = allocation.house_construction.to_u32().unwrap_or(0) as usize;
+        let idle_workers = self
+            .workers
+            .len()
+            .saturating_sub(food_workers + wood_workers + construction_workers);
+
+        logger.log(
+            tick,
+            self.id_str.clone(),
+            EventType::WorkerAllocation {
+                food_workers,
+                wood_workers,
+                construction_workers,
+                repair_workers: 0, // We'll track this separately
+                idle_workers,
+            },
+        );
+
+        // Production
+        let wood_produced = produced(self.wood_slots, dec!(0.1), allocation.wood);
+        let food_produced = produced(self.food_slots, dec!(2.0), allocation.food);
+
+        if wood_produced > dec!(0) {
+            logger.log(
+                tick,
+                self.id_str.clone(),
+                EventType::ResourceProduced {
+                    resource: ResourceType::Wood,
+                    amount: wood_produced,
+                    workers_assigned: wood_workers,
+                },
+            );
+        }
+
+        if food_produced > dec!(0) {
+            logger.log(
+                tick,
+                self.id_str.clone(),
+                EventType::ResourceProduced {
+                    resource: ResourceType::Food,
+                    amount: food_produced,
+                    workers_assigned: food_workers,
+                },
+            );
+        }
+
+        self.wood += wood_produced;
+        self.food += food_produced;
 
         // Handle house construction
         if allocation.house_construction > dec!(0.0) {
@@ -118,7 +235,32 @@ impl Village {
                 // Try to build a house if enough wood is available (10 wood)
                 if self.wood >= dec!(10.0) {
                     self.wood -= dec!(10.0);
-                    self.houses.push(House::default());
+                    logger.log(
+                        tick,
+                        self.id_str.clone(),
+                        EventType::ResourceConsumed {
+                            resource: ResourceType::Wood,
+                            amount: dec!(10.0),
+                            purpose: ConsumptionPurpose::HouseConstruction,
+                        },
+                    );
+
+                    let new_house = House {
+                        id: self.next_house_id,
+                        maintenance_level: dec!(0.0),
+                    };
+                    self.next_house_id += 1;
+
+                    logger.log(
+                        tick,
+                        self.id_str.clone(),
+                        EventType::HouseCompleted {
+                            house_id: new_house.id,
+                            total_houses: self.houses.len() + 1,
+                        },
+                    );
+
+                    self.houses.push(new_house);
                     self.construction_progress -= dec!(60.0);
                     println!("New house built! Total houses: {}", self.houses.len());
                 } else {
@@ -134,16 +276,18 @@ impl Village {
             .map(|h| h.shelter_effect())
             .sum::<Decimal>();
         let mut new_workers = 0;
-        let mut workers_to_remove = 0;
+        let mut workers_to_remove = Vec::new();
+        let mut food_consumed = dec!(0);
 
         // println!(
         //     "wood: {}, food: {}, shelter_effect: {}",
         //     self.wood, self.food, shelter_effect
         // );
 
-        for worker in self.workers.iter_mut() {
+        for (i, worker) in self.workers.iter_mut().enumerate() {
             let has_food = if self.food >= dec!(1.0) {
                 self.food -= dec!(1.0);
+                food_consumed += dec!(1.0);
                 worker.days_without_food = 0;
                 true
             } else {
@@ -175,34 +319,113 @@ impl Village {
             }
             if worker.days_without_food >= 10 {
                 println!("worker.days_without_food > 10");
-                workers_to_remove += 1;
+                workers_to_remove.push((i, worker.id, DeathCause::Starvation));
             } else if worker.days_without_shelter >= 30 {
                 println!("worker.days_without_shelter > 30");
-                workers_to_remove += 1;
+                workers_to_remove.push((i, worker.id, DeathCause::NoShelter));
             }
         }
 
-        if workers_to_remove > 0 {
-            self.workers
-                .truncate(self.workers.len() - workers_to_remove);
+        // Log food consumption
+        if food_consumed > dec!(0) {
+            logger.log(
+                tick,
+                self.id_str.clone(),
+                EventType::ResourceConsumed {
+                    resource: ResourceType::Food,
+                    amount: food_consumed,
+                    purpose: ConsumptionPurpose::WorkerFeeding,
+                },
+            );
         }
-        self.workers
-            .extend(std::iter::repeat_n(Worker::default(), new_workers));
 
+        // Remove dead workers and log deaths
+        workers_to_remove.sort_by_key(|&(i, _, _)| std::cmp::Reverse(i));
+        for (_, worker_id, cause) in &workers_to_remove {
+            logger.log(
+                tick,
+                self.id_str.clone(),
+                EventType::WorkerDied {
+                    worker_id: *worker_id,
+                    cause: cause.clone(),
+                    total_population: self.workers.len() - 1,
+                },
+            );
+        }
+
+        for (i, _, _) in workers_to_remove {
+            self.workers.remove(i);
+        }
+
+        // Add new workers and log births
+        for _ in 0..new_workers {
+            let new_worker = Worker {
+                id: self.next_worker_id,
+                days_without_food: 0,
+                days_without_shelter: 0,
+                days_with_both: 0,
+            };
+            self.next_worker_id += 1;
+
+            logger.log(
+                tick,
+                self.id_str.clone(),
+                EventType::WorkerBorn {
+                    worker_id: new_worker.id,
+                    total_population: self.workers.len() + 1,
+                },
+            );
+
+            self.workers.push(new_worker);
+        }
+
+        let mut wood_for_maintenance = dec!(0);
         for house in self.houses.iter_mut() {
             if self.wood >= dec!(0.1) {
-                // eprintln!("wood >= 0.1");
                 self.wood -= dec!(0.1);
+                wood_for_maintenance += dec!(0.1);
                 if self.wood >= dec!(0.1) && house.maintenance_level < dec!(0.0) {
-                    // eprintln!("wood > 0.1 && house.maintenance_level < 0.0");
                     house.maintenance_level += dec!(0.1);
                     self.wood -= dec!(0.1);
+                    wood_for_maintenance += dec!(0.1);
                 }
             } else {
-                // eprintln!("wood < 0.1");
                 house.maintenance_level -= dec!(0.1);
+                logger.log(
+                    tick,
+                    self.id_str.clone(),
+                    EventType::HouseDecayed {
+                        house_id: house.id,
+                        maintenance_level: house.maintenance_level,
+                    },
+                );
             }
         }
+
+        if wood_for_maintenance > dec!(0) {
+            logger.log(
+                tick,
+                self.id_str.clone(),
+                EventType::ResourceConsumed {
+                    resource: ResourceType::Wood,
+                    amount: wood_for_maintenance,
+                    purpose: ConsumptionPurpose::HouseMaintenance,
+                },
+            );
+        }
+
+        // Log village state snapshot
+        logger.log(
+            tick,
+            self.id_str.clone(),
+            EventType::VillageStateSnapshot {
+                population: self.workers.len(),
+                houses: self.houses.len(),
+                food: self.food,
+                wood: self.wood,
+                money: self.money,
+            },
+        );
     }
 }
 
@@ -249,52 +472,154 @@ impl Strategy for DefaultStrategy {
 }
 
 fn main() {
-    let mut villages = vec![
-        Village::new(0, (10, 10), (10, 10), 15, 3),
-        Village::new(1, (10, 10), (10, 10), 15, 3),
-    ];
+    // Load scenario - could be from command line args or file
+    let scenarios = create_standard_scenarios();
+    let scenario = scenarios.get("basic").unwrap().clone();
 
-    let bids: Vec<(Decimal, u32, usize)> = Vec::new();
-    let asks: Vec<(Decimal, u32, usize)> = Vec::new();
+    println!("{}", scenario);
+
+    // Initialize villages from scenario
+    let mut villages: Vec<Village> = scenario
+        .villages
+        .iter()
+        .enumerate()
+        .map(|(i, config)| Village::from_config(i, config))
+        .collect();
+
+    // Initialize event logger
+    let mut logger = EventLogger::new();
+
+    // Track initial populations for metrics
+    let village_configs: Vec<(String, usize)> = villages
+        .iter()
+        .map(|v| (v.id_str.clone(), v.workers.len()))
+        .collect();
 
     let strategy = DefaultStrategy;
 
-    loop {
+    // Run simulation
+    for tick in 0..scenario.parameters.days_to_simulate {
         let mut auction = Auction::new(10);
 
+        // Strategy phase
         for village in villages.iter_mut() {
+            let bids: Vec<(Decimal, u32, usize)> = Vec::new();
+            let asks: Vec<(Decimal, u32, usize)> = Vec::new();
+
             let (allocation, bid, ask) =
                 strategy.decide_allocation_and_bids_asks(village, &bids, &asks);
-            village.update(allocation);
 
-            auction.add_participant(&format!("village_{}", village.id), dec!(0.0));
-            auction.add_order(
-                village.id,
-                &format!("village_{}", village.id),
-                "wood",
-                OrderType::Bid,
-                bid.1 as u64,
-                bid.0,
-                1,
-            );
-            auction.add_order(
-                village.id,
-                &format!("village_{}", village.id),
-                "wood",
-                OrderType::Ask,
-                ask.1 as u64,
-                ask.0,
-                1,
-            );
+            // Update village with event logging
+            village.update(allocation, &mut logger, tick);
+
+            // Add auction participants and orders
+            auction.add_participant(&village.id_str, village.money);
+
+            if bid.1 > 0 {
+                logger.log(
+                    tick,
+                    village.id_str.clone(),
+                    EventType::OrderPlaced {
+                        resource: ResourceType::Wood,
+                        quantity: Decimal::from(bid.1),
+                        price: bid.0,
+                        side: TradeSide::Buy,
+                        order_id: format!("{}_{}_bid", village.id_str, tick),
+                    },
+                );
+
+                auction.add_order(
+                    village.id * 1000 + tick, // Unique order ID
+                    &village.id_str,
+                    "wood",
+                    OrderType::Bid,
+                    bid.1 as u64,
+                    bid.0,
+                    tick as u64,
+                );
+            }
+
+            if ask.1 > 0 {
+                logger.log(
+                    tick,
+                    village.id_str.clone(),
+                    EventType::OrderPlaced {
+                        resource: ResourceType::Wood,
+                        quantity: Decimal::from(ask.1),
+                        price: ask.0,
+                        side: TradeSide::Sell,
+                        order_id: format!("{}_{}_ask", village.id_str, tick),
+                    },
+                );
+
+                auction.add_order(
+                    village.id * 1000 + tick + 500, // Unique order ID
+                    &village.id_str,
+                    "wood",
+                    OrderType::Ask,
+                    ask.1 as u64,
+                    ask.0,
+                    tick as u64,
+                );
+            }
 
             village.bid_wood_for_food = bid;
             village.ask_wood_for_food = ask;
         }
 
-        let success = auction.run();
-        if let Ok(success) = success {
+        // Run auction and process trades
+        let auction_result = auction.run();
+        if let Ok(success) = auction_result {
+            // Log trades
+            for fill in &success.final_fills {
+                // Find which villages were involved
+                // This is a simplified version - in real code you'd track participant IDs properly
+                logger.log(
+                    tick,
+                    "auction".to_string(),
+                    EventType::TradeExecuted {
+                        resource: ResourceType::Wood,
+                        quantity: Decimal::from(fill.filled_quantity),
+                        price: fill.price,
+                        counterparty: "other".to_string(),
+                        side: if fill.order_type == OrderType::Bid {
+                            TradeSide::Buy
+                        } else {
+                            TradeSide::Sell
+                        },
+                    },
+                );
+            }
+
             apply_trades(&mut villages, &success.final_fills);
         }
+
+        // Check for early termination if all villages are dead
+        if villages.iter().all(|v| v.workers.is_empty()) {
+            println!("All villages have died at tick {}", tick);
+            break;
+        }
+    }
+
+    // Calculate and display metrics
+    let metrics = MetricsCalculator::calculate_scenario_metrics(
+        logger.get_events(),
+        &village_configs,
+        scenario.parameters.days_to_simulate,
+    );
+
+    println!("\n{}", metrics);
+
+    // Display individual village metrics
+    for village_metrics in metrics.villages.values() {
+        println!("\n{}", village_metrics);
+    }
+
+    // Save events to file
+    if let Err(e) = logger.save_to_file("simulation_events.json") {
+        eprintln!("Failed to save events: {}", e);
+    } else {
+        println!("\nEvents saved to simulation_events.json");
     }
 }
 
@@ -304,6 +629,12 @@ mod tests {
     use rust_decimal_macros::dec;
 
     use super::*;
+
+    // Helper to update village without logging
+    fn update_village(village: &mut Village, allocation: Allocation) {
+        let mut logger = EventLogger::new();
+        village.update(allocation, &mut logger, 0);
+    }
 
     // Helper function to create allocations more easily
     fn alloc(wood: f64, food: f64, construction: f64) -> Allocation {
@@ -321,7 +652,15 @@ mod tests {
         workers: usize,
         houses: usize,
     ) -> Village {
-        Village::new(0, wood_slots, food_slots, workers, houses)
+        let mut village = Village::new(0, wood_slots, food_slots, workers, houses);
+        // Initialize worker and house IDs for tests
+        for (i, worker) in village.workers.iter_mut().enumerate() {
+            worker.id = i;
+        }
+        for (i, house) in village.houses.iter_mut().enumerate() {
+            house.id = i;
+        }
+        village
     }
 
     // Macro to simplify resource assertions
@@ -356,7 +695,7 @@ mod tests {
     #[test]
     fn test_village_update_basic_production() {
         let mut village = village_with_slots((2, 0), (1, 0), 3, 0);
-        village.update(alloc(2.0, 1.0, 0.0));
+        update_village(&mut village, alloc(2.0, 1.0, 0.0));
 
         // Wood: 2 worker-days * 0.1 = 0.2 production
         // Food: 1 worker-day * 2.0 = 2.0 produced, 3 consumed = -1 net
@@ -366,7 +705,7 @@ mod tests {
     #[test]
     fn test_village_update_partial_slots() {
         let mut village = village_with_slots((1, 1), (1, 1), 3, 0);
-        village.update(alloc(3.0, 0.0, 0.0));
+        update_village(&mut village, alloc(3.0, 0.0, 0.0));
 
         // With slots (1, 1) and 3 worker-days allocated to wood:
         // Full slot: 1 worker-day at 100% = 0.1 wood
@@ -387,7 +726,7 @@ mod tests {
             days_with_both = 0
         );
 
-        village.update(alloc(1.0, 0.0, 0.0));
+        update_village(&mut village, alloc(1.0, 0.0, 0.0));
 
         // Worker should have food and shelter (village starts with 100 food)
         assert_worker_state!(
@@ -404,7 +743,7 @@ mod tests {
         village.wood = dec!(0.0);
         village.food = dec!(0.0);
 
-        village.update(alloc(1.0, 0.0, 0.0));
+        update_village(&mut village, alloc(1.0, 0.0, 0.0));
 
         // Worker should be without food but still have shelter
         assert_worker_state!(
@@ -422,7 +761,7 @@ mod tests {
         let mut village = village_with_slots((1, 0), (1, 0), 1, 1);
         village.wood = dec!(0.0);
 
-        village.update(alloc(0.0, 1.0, 0.0));
+        update_village(&mut village, alloc(0.0, 1.0, 0.0));
 
         assert_eq!(village.houses[0].maintenance_level, dec!(-0.1));
     }
@@ -432,7 +771,7 @@ mod tests {
         let mut village = village_with_slots((2, 0), (1, 0), 2, 1);
         village.wood = dec!(0.0);
 
-        village.update(alloc(2.0, 0.0, 0.0));
+        update_village(&mut village, alloc(2.0, 0.0, 0.0));
 
         // Produces 0.2 wood, uses 0.1 for maintenance
         assert_eq!(village.houses[0].maintenance_level, dec!(0.0));
@@ -445,7 +784,7 @@ mod tests {
         village.wood = dec!(0.0);
         village.houses[0].maintenance_level = dec!(-2.0);
 
-        village.update(alloc(2.0, 0.0, 0.0));
+        update_village(&mut village, alloc(2.0, 0.0, 0.0));
 
         // Produces 0.2 wood, uses 0.1 for upkeep and 0.1 for repair
         assert_eq!(village.houses[0].maintenance_level, dec!(-1.9));
@@ -458,7 +797,10 @@ mod tests {
 
         // Run for 30 days - worker should die on day 30
         for day in 1..=30 {
-            village.update(alloc(village.worker_days().to_f64().unwrap(), 0.0, 0.0));
+            update_village(
+                &mut village,
+                alloc(village.worker_days().to_f64().unwrap(), 0.0, 0.0),
+            );
 
             if day < 30 {
                 assert_eq!(
@@ -485,7 +827,10 @@ mod tests {
 
         // Run for 10 days - worker should die on day 10
         for day in 1..=10 {
-            village.update(alloc(village.worker_days().to_f64().unwrap(), 0.0, 0.0));
+            update_village(
+                &mut village,
+                alloc(village.worker_days().to_f64().unwrap(), 0.0, 0.0),
+            );
 
             if day < 10 {
                 assert_eq!(
@@ -513,7 +858,7 @@ mod tests {
 
         // Allocate all worker days to construction
         let worker_days = village.worker_days();
-        village.update(alloc(0.0, 0.0, worker_days.to_f64().unwrap()));
+        update_village(&mut village, alloc(0.0, 0.0, worker_days.to_f64().unwrap()));
 
         // Should have built one house (60 worker-days) using 10 wood
         assert_eq!(village.houses.len(), 1);
@@ -528,7 +873,7 @@ mod tests {
 
         // Allocate all worker days to construction
         let worker_days = village.worker_days();
-        village.update(alloc(0.0, 0.0, worker_days.to_f64().unwrap()));
+        update_village(&mut village, alloc(0.0, 0.0, worker_days.to_f64().unwrap()));
 
         // Should have accumulated progress but not built a house
         assert_eq!(village.houses.len(), 0);
@@ -557,11 +902,14 @@ mod tests {
             let wood_alloc = (worker_days * dec!(0.4)).min(worker_days - food_alloc);
             let construction_alloc = worker_days - food_alloc - wood_alloc;
 
-            village.update(alloc(
-                wood_alloc.to_f64().unwrap(),
-                food_alloc.to_f64().unwrap(),
-                construction_alloc.to_f64().unwrap(),
-            ));
+            update_village(
+                &mut village,
+                alloc(
+                    wood_alloc.to_f64().unwrap(),
+                    food_alloc.to_f64().unwrap(),
+                    construction_alloc.to_f64().unwrap(),
+                ),
+            );
 
             // Basic survival checks
             assert!(village.workers.len() > 0, "All workers died by day {}", day);
@@ -606,7 +954,7 @@ mod tests {
             let worker_days = village.worker_days();
 
             // All effort on wood since no food slots
-            village.update(alloc(worker_days.to_f64().unwrap(), 0.0, 0.0));
+            update_village(&mut village, alloc(worker_days.to_f64().unwrap(), 0.0, 0.0));
 
             if village.workers.len() < initial_workers {
                 death_days.push(day);
@@ -653,11 +1001,14 @@ mod tests {
             let wood_alloc = (worker_days * dec!(0.3)).min(worker_days - food_alloc);
             let construction_alloc = worker_days - food_alloc - wood_alloc;
 
-            village.update(alloc(
-                wood_alloc.to_f64().unwrap(),
-                food_alloc.to_f64().unwrap(),
-                construction_alloc.to_f64().unwrap(),
-            ));
+            update_village(
+                &mut village,
+                alloc(
+                    wood_alloc.to_f64().unwrap(),
+                    food_alloc.to_f64().unwrap(),
+                    construction_alloc.to_f64().unwrap(),
+                ),
+            );
 
             if day % 10 == 0 {
                 population_history.push(village.workers.len());
@@ -710,11 +1061,14 @@ mod tests {
             let wood_alloc = (worker_days * dec!(0.3)).min(worker_days - food_alloc);
             let construction_alloc = worker_days - food_alloc - wood_alloc;
 
-            village.update(alloc(
-                wood_alloc.to_f64().unwrap(),
-                food_alloc.to_f64().unwrap(),
-                construction_alloc.to_f64().unwrap(),
-            ));
+            update_village(
+                &mut village,
+                alloc(
+                    wood_alloc.to_f64().unwrap(),
+                    food_alloc.to_f64().unwrap(),
+                    construction_alloc.to_f64().unwrap(),
+                ),
+            );
 
             // Check if population has stabilized around sustainable level
             if day > 50 && village.workers.len() <= 10 {
@@ -750,19 +1104,25 @@ mod tests {
         for day in 1..=50 {
             // Wood village focuses on wood production
             let wood_worker_days = wood_village.worker_days();
-            wood_village.update(alloc(
-                (wood_worker_days * dec!(0.8)).to_f64().unwrap(),
-                (wood_worker_days * dec!(0.2)).to_f64().unwrap(),
-                0.0,
-            ));
+            update_village(
+                &mut wood_village,
+                alloc(
+                    (wood_worker_days * dec!(0.8)).to_f64().unwrap(),
+                    (wood_worker_days * dec!(0.2)).to_f64().unwrap(),
+                    0.0,
+                ),
+            );
 
             // Food village focuses on food production
             let food_worker_days = food_village.worker_days();
-            food_village.update(alloc(
-                (food_worker_days * dec!(0.2)).to_f64().unwrap(),
-                (food_worker_days * dec!(0.8)).to_f64().unwrap(),
-                0.0,
-            ));
+            update_village(
+                &mut food_village,
+                alloc(
+                    (food_worker_days * dec!(0.2)).to_f64().unwrap(),
+                    (food_worker_days * dec!(0.8)).to_f64().unwrap(),
+                    0.0,
+                ),
+            );
 
             // Simple trading simulation every 5 days
             if day % 5 == 0 && wood_village.wood > dec!(10.0) && food_village.food > dec!(10.0) {
@@ -805,11 +1165,14 @@ mod tests {
         // Baseline growth for 50 days
         for _ in 1..=50 {
             let worker_days = village.worker_days();
-            village.update(alloc(
-                (worker_days * dec!(0.4)).to_f64().unwrap(),
-                (worker_days * dec!(0.4)).to_f64().unwrap(),
-                (worker_days * dec!(0.2)).to_f64().unwrap(),
-            ));
+            update_village(
+                &mut village,
+                alloc(
+                    (worker_days * dec!(0.4)).to_f64().unwrap(),
+                    (worker_days * dec!(0.4)).to_f64().unwrap(),
+                    (worker_days * dec!(0.2)).to_f64().unwrap(),
+                ),
+            );
         }
 
         let _pre_disaster_population = village.workers.len();
@@ -826,11 +1189,14 @@ mod tests {
             let worker_days = village.worker_days();
 
             // Focus on recovery: wood for repairs, food for survival
-            village.update(alloc(
-                (worker_days * dec!(0.5)).to_f64().unwrap(),
-                (worker_days * dec!(0.4)).to_f64().unwrap(),
-                (worker_days * dec!(0.1)).to_f64().unwrap(),
-            ));
+            update_village(
+                &mut village,
+                alloc(
+                    (worker_days * dec!(0.5)).to_f64().unwrap(),
+                    (worker_days * dec!(0.4)).to_f64().unwrap(),
+                    (worker_days * dec!(0.1)).to_f64().unwrap(),
+                ),
+            );
         }
 
         // Check recovery
@@ -871,17 +1237,23 @@ mod tests {
             let struggling_wd = struggling_village.worker_days();
 
             // Same allocation strategy
-            healthy_village.update(alloc(
-                (healthy_wd * dec!(0.5)).to_f64().unwrap(),
-                (healthy_wd * dec!(0.5)).to_f64().unwrap(),
-                0.0,
-            ));
+            update_village(
+                &mut healthy_village,
+                alloc(
+                    (healthy_wd * dec!(0.5)).to_f64().unwrap(),
+                    (healthy_wd * dec!(0.5)).to_f64().unwrap(),
+                    0.0,
+                ),
+            );
 
-            struggling_village.update(alloc(
-                (struggling_wd * dec!(0.5)).to_f64().unwrap(),
-                (struggling_wd * dec!(0.5)).to_f64().unwrap(),
-                0.0,
-            ));
+            update_village(
+                &mut struggling_village,
+                alloc(
+                    (struggling_wd * dec!(0.5)).to_f64().unwrap(),
+                    (struggling_wd * dec!(0.5)).to_f64().unwrap(),
+                    0.0,
+                ),
+            );
 
             healthy_production += healthy_wd;
             struggling_production += struggling_wd;
