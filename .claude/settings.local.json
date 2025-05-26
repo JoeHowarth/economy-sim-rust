@@ -17,7 +17,9 @@
       "Bash(cargo check:*)",
       "Bash(cargo run:*)",
       "Bash(cargo fix:*)",
-      "Bash(RUST_BACKTRACE=1 cargo test test_multi_resource_clearing -p village-model --lib -- --nocapture)"
+      "Bash(RUST_BACKTRACE=1 cargo test test_multi_resource_clearing -p village-model --lib -- --nocapture)",
+      "Bash(rm:*)",
+      "Bash(rg:*)"
     ],
     "deny": []
   }
