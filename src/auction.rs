@@ -564,11 +564,17 @@ mod tests {
     use rust_decimal_macros::dec; // Import macro for tests
     use std::collections::HashMap;
 
+    // Constants for participant IDs
+    const ALICE: u32 = 1;
+    const BOB: u32 = 2;
+    const CAROL: u32 = 3;
+    const DAVID: u32 = 4;
+
     // Helper to create participants with Decimal currency
     pub fn create_participants(data: Vec<(u32, Decimal)>) -> HashMap<ParticipantId, Participant> {
         data.into_iter()
-            .map(|(id_str, currency)| {
-                let id = ParticipantId(id_str.to_string());
+            .map(|(id_num, currency)| {
+                let id = ParticipantId(id_num);
                 (id.clone(), Participant { id, currency })
             })
             .collect()
@@ -577,7 +583,7 @@ mod tests {
     // Helper to create orders with Decimal price
     pub fn create_order(
         id: usize,
-        p_id: &str,
+        p_id: u32,
         r_id: &str,
         order_type: OrderType,
         qty: u64,
@@ -586,7 +592,7 @@ mod tests {
     ) -> Order {
         Order {
             id: OrderId(id),
-            participant_id: ParticipantId(p_id.to_string()),
+            participant_id: ParticipantId(p_id),
             resource_id: ResourceId(r_id.to_string()),
             order_type,
             original_quantity: qty,
@@ -599,11 +605,11 @@ mod tests {
     #[test]
     fn test_simple_match_sufficient_funds_decimal() {
         let orders = vec![
-            create_order(1, "Alice", "CPU", OrderType::Ask, 10, dec!(100.0), 1), // Use dec!
-            create_order(2, "Bob", "CPU", OrderType::Bid, 5, dec!(110.0), 2),    // Use dec!
+            create_order(1, ALICE, "CPU", OrderType::Ask, 10, dec!(100.0), 1),
+            create_order(2, BOB, "CPU", OrderType::Bid, 5, dec!(110.0), 2),
         ];
         let participants =
-            create_participants(vec![("Alice", dec!(1000.0)), ("Bob", dec!(1000.0))]); // Use dec!
+            create_participants(vec![(ALICE, dec!(1000.0)), (BOB, dec!(1000.0))]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
         match result {
@@ -633,12 +639,12 @@ mod tests {
                 let balance_alice = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Alice".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
                     .unwrap();
                 let balance_bob = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Bob".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(BOB))
                     .unwrap();
 
                 // Alice sells 5 @ 110 = +550 -> Final 1550.0
@@ -655,11 +661,11 @@ mod tests {
     #[test]
     fn test_no_match_price_gap_decimal() {
         let orders = vec![
-            create_order(1, "Alice", "CPU", OrderType::Ask, 10, dec!(110.0), 1),
-            create_order(2, "Bob", "CPU", OrderType::Bid, 5, dec!(100.0), 2),
+            create_order(1, ALICE, "CPU", OrderType::Ask, 10, dec!(110.0), 1),
+            create_order(2, BOB, "CPU", OrderType::Bid, 5, dec!(100.0), 2),
         ];
         let participants =
-            create_participants(vec![("Alice", dec!(1000.0)), ("Bob", dec!(1000.0))]);
+            create_participants(vec![(ALICE, dec!(1000.0)), (BOB, dec!(1000.0))]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
         match result {
@@ -674,12 +680,12 @@ mod tests {
                 let balance_alice = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Alice".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
                     .unwrap();
                 let balance_bob = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Bob".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(BOB))
                     .unwrap();
                 assert_eq!(balance_alice.final_currency, dec!(1000.0)); // Balances unchanged
                 assert_eq!(balance_bob.final_currency, dec!(1000.0));
@@ -694,15 +700,15 @@ mod tests {
     #[test]
     fn test_budget_constraint_pruning_decimal() {
         let orders = vec![
-            create_order(1, "Alice", "CPU", OrderType::Ask, 10, dec!(100.0), 1),
-            create_order(2, "Bob", "CPU", OrderType::Bid, 8, dec!(110.0), 2),
-            create_order(3, "Carol", "RAM", OrderType::Ask, 5, dec!(50.0), 3),
-            create_order(4, "Bob", "RAM", OrderType::Bid, 4, dec!(60.0), 4),
+            create_order(1, ALICE, "CPU", OrderType::Ask, 10, dec!(100.0), 1),
+            create_order(2, BOB, "CPU", OrderType::Bid, 8, dec!(110.0), 2),
+            create_order(3, CAROL, "RAM", OrderType::Ask, 5, dec!(50.0), 3),
+            create_order(4, BOB, "RAM", OrderType::Bid, 4, dec!(60.0), 4),
         ];
         let participants = create_participants(vec![
-            ("Alice", dec!(1000.0)),
-            ("Bob", dec!(700.0)), // Bob's budget
-            ("Carol", dec!(1000.0)),
+            (ALICE, dec!(1000.0)),
+            (BOB, dec!(700.0)), // Bob's budget
+            (CAROL, dec!(1000.0)),
         ]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
@@ -752,7 +758,7 @@ mod tests {
                 let balance_bob = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Bob".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(BOB))
                     .unwrap();
                 // Bob bought 5 CPU @ 110 (cost 550) + 2 RAM @ 60 (cost 120) = Total cost 670
                 // Final balance = 700 - 670 = 30
@@ -761,7 +767,7 @@ mod tests {
                 let balance_alice = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Alice".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
                     .unwrap();
                 // Alice sold 5 CPU @ 110 (proceeds 550) -> Final 1550.0
                 assert_eq!(balance_alice.final_currency, dec!(1550.0));
@@ -769,7 +775,7 @@ mod tests {
                 let balance_carol = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Carol".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(CAROL))
                     .unwrap();
                 // Carol sold 2 RAM @ 60 (proceeds 120) -> Final 1120.0
                 assert_eq!(balance_carol.final_currency, dec!(1120.0));
@@ -784,16 +790,16 @@ mod tests {
     #[test]
     fn test_price_time_priority_decimal() {
         let orders = vec![
-            create_order(1, "Alice", "GPU", OrderType::Ask, 5, dec!(500.0), 10),
-            create_order(2, "Bob", "GPU", OrderType::Bid, 3, dec!(510.0), 5),
-            create_order(3, "Carol", "GPU", OrderType::Bid, 4, dec!(500.0), 8),
-            create_order(4, "David", "GPU", OrderType::Bid, 2, dec!(500.0), 12),
+            create_order(1, ALICE, "GPU", OrderType::Ask, 5, dec!(500.0), 10),
+            create_order(2, BOB, "GPU", OrderType::Bid, 3, dec!(510.0), 5),
+            create_order(3, CAROL, "GPU", OrderType::Bid, 4, dec!(500.0), 8),
+            create_order(4, DAVID, "GPU", OrderType::Bid, 2, dec!(500.0), 12),
         ];
         let participants = create_participants(vec![
-            ("Alice", dec!(10000.0)),
-            ("Bob", dec!(10000.0)),
-            ("Carol", dec!(10000.0)),
-            ("David", dec!(10000.0)),
+            (ALICE, dec!(10000.0)),
+            (BOB, dec!(10000.0)),
+            (CAROL, dec!(10000.0)),
+            (DAVID, dec!(10000.0)),
         ]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
@@ -840,12 +846,12 @@ mod tests {
     fn test_max_iterations_failure_decimal() {
         // Scenario that previously converged in 1 iter
         let orders = vec![
-            create_order(1, "Alice", "A", OrderType::Ask, 10, dec!(10.0), 1),
-            create_order(2, "Bob", "A", OrderType::Bid, 5, dec!(11.0), 2),
-            create_order(3, "Alice", "B", OrderType::Bid, 6, dec!(10.0), 3),
-            create_order(4, "Bob", "B", OrderType::Ask, 8, dec!(9.0), 4),
+            create_order(1, ALICE, "A", OrderType::Ask, 10, dec!(10.0), 1),
+            create_order(2, BOB, "A", OrderType::Bid, 5, dec!(11.0), 2),
+            create_order(3, ALICE, "B", OrderType::Bid, 6, dec!(10.0), 3),
+            create_order(4, BOB, "B", OrderType::Ask, 8, dec!(9.0), 4),
         ];
-        let participants = create_participants(vec![("Alice", dec!(55.0)), ("Bob", dec!(45.0))]);
+        let participants = create_participants(vec![(ALICE, dec!(55.0)), (BOB, dec!(45.0))]);
 
         // Run with max_iterations = 0
         let result_iter_0 = run_auction(orders, participants, 0, HashMap::new());
@@ -864,12 +870,12 @@ mod tests {
     #[test]
     fn test_barter_simple_direct_decimal() {
         let orders = vec![
-            create_order(1, "Alice", "X", OrderType::Ask, 1, dec!(100.0), 1),
-            create_order(2, "Bob", "X", OrderType::Bid, 1, dec!(100.0), 2),
-            create_order(3, "Alice", "Y", OrderType::Bid, 1, dec!(100.0), 3),
-            create_order(4, "Bob", "Y", OrderType::Ask, 1, dec!(100.0), 4),
+            create_order(1, ALICE, "X", OrderType::Ask, 1, dec!(100.0), 1),
+            create_order(2, BOB, "X", OrderType::Bid, 1, dec!(100.0), 2),
+            create_order(3, ALICE, "Y", OrderType::Bid, 1, dec!(100.0), 3),
+            create_order(4, BOB, "Y", OrderType::Ask, 1, dec!(100.0), 4),
         ];
-        let participants = create_participants(vec![("Alice", dec!(0.0)), ("Bob", dec!(0.0))]);
+        let participants = create_participants(vec![(ALICE, dec!(0.0)), (BOB, dec!(0.0))]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
         match result {
@@ -887,12 +893,12 @@ mod tests {
                 let balance_alice = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Alice".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
                     .unwrap();
                 let balance_bob = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Bob".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(BOB))
                     .unwrap();
 
                 assert_eq!(balance_alice.final_currency, dec!(0.0));
@@ -914,12 +920,12 @@ mod tests {
         // Let's use a price representable exactly: sell 1 X @ 10.50, buy 3 Y @ 3.50
         let price_y_exact = dec!(3.50);
         let orders = vec![
-            create_order(1, "Alice", "X", OrderType::Ask, 1, dec!(10.50), 1),
-            create_order(2, "Bob", "X", OrderType::Bid, 1, dec!(10.50), 2),
-            create_order(3, "Alice", "Y", OrderType::Bid, 3, price_y_exact, 3), // 3 * 3.50 = 10.50
-            create_order(4, "Bob", "Y", OrderType::Ask, 3, price_y_exact, 4),
+            create_order(1, ALICE, "X", OrderType::Ask, 1, dec!(10.50), 1),
+            create_order(2, BOB, "X", OrderType::Bid, 1, dec!(10.50), 2),
+            create_order(3, ALICE, "Y", OrderType::Bid, 3, price_y_exact, 3), // 3 * 3.50 = 10.50
+            create_order(4, BOB, "Y", OrderType::Ask, 3, price_y_exact, 4),
         ];
-        let participants = create_participants(vec![("Alice", dec!(0.0)), ("Bob", dec!(0.0))]);
+        let participants = create_participants(vec![(ALICE, dec!(0.0)), (BOB, dec!(0.0))]);
         let result = run_auction(orders, participants, 5, HashMap::new());
 
         match result {
@@ -937,12 +943,12 @@ mod tests {
                 let balance_alice = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Alice".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
                     .unwrap();
                 let balance_bob = success
                     .final_balances
                     .iter()
-                    .find(|b| b.participant_id == ParticipantId("Bob".to_string()))
+                    .find(|b| b.participant_id == ParticipantId(BOB))
                     .unwrap();
 
                 // Alice Cost = 3 * 3.50 = 10.50. Proceeds = 1 * 10.50 = 10.50. Net = 0.
