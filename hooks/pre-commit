@@ -1,0 +1,7 @@
+#!/bin/sh
+
+# Format code
+cargo fmt
+
+# Check lints
+cargo clippy -- -D warnings

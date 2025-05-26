@@ -551,12 +551,12 @@ mod tests {
 
         for day in 1..=30 {
             let worker_days = village.worker_days();
-            
+
             // Balanced allocation: prioritize food, then wood, small construction
             let food_alloc = (worker_days * dec!(0.4)).min(worker_days);
             let wood_alloc = (worker_days * dec!(0.4)).min(worker_days - food_alloc);
             let construction_alloc = worker_days - food_alloc - wood_alloc;
-            
+
             village.update(alloc(
                 wood_alloc.to_f64().unwrap(),
                 food_alloc.to_f64().unwrap(),
@@ -564,11 +564,7 @@ mod tests {
             ));
 
             // Basic survival checks
-            assert!(
-                village.workers.len() > 0,
-                "All workers died by day {}",
-                day
-            );
+            assert!(village.workers.len() > 0, "All workers died by day {}", day);
             assert!(
                 village.food >= dec!(0.0),
                 "Food went negative on day {}",
@@ -608,23 +604,26 @@ mod tests {
         for day in 1..=15 {
             let initial_workers = village.workers.len();
             let worker_days = village.worker_days();
-            
+
             // All effort on wood since no food slots
             village.update(alloc(worker_days.to_f64().unwrap(), 0.0, 0.0));
-            
+
             if village.workers.len() < initial_workers {
                 death_days.push(day);
             }
         }
 
         // First deaths should occur around day 12 (2 days initial food + 10 days starvation)
-        assert!(!death_days.is_empty(), "No workers died despite no food production");
+        assert!(
+            !death_days.is_empty(),
+            "No workers died despite no food production"
+        );
         assert!(
             death_days[0] >= 11 && death_days[0] <= 13,
             "First death on day {}, expected around day 12",
             death_days[0]
         );
-        
+
         // Eventually all workers should die
         assert_eq!(
             village.workers.len(),
@@ -648,12 +647,12 @@ mod tests {
         // Simulate 200 days with focus on growth
         for day in 1..=200 {
             let worker_days = village.worker_days();
-            
+
             // Growth-oriented allocation - more focus on food to prevent starvation
             let food_alloc = (worker_days * dec!(0.5)).min(worker_days);
             let wood_alloc = (worker_days * dec!(0.3)).min(worker_days - food_alloc);
             let construction_alloc = worker_days - food_alloc - wood_alloc;
-            
+
             village.update(alloc(
                 wood_alloc.to_f64().unwrap(),
                 food_alloc.to_f64().unwrap(),
@@ -678,7 +677,7 @@ mod tests {
             "Houses declined after 200 days: {} houses",
             village.houses.len()
         );
-        
+
         // Check for stability or growth (not necessarily continuous growth)
         let final_population = village.workers.len();
         let initial_population = 10;
@@ -700,23 +699,23 @@ mod tests {
         // Workers greatly exceed production capacity
         let _max_wood_production = dec!(2.0) * dec!(0.1); // 2 full slots * 0.1 per slot
         let _max_food_production = dec!(2.0) * dec!(2.0); // 2 full slots * 2.0 per slot
-        
+
         let mut population_stable = false;
-        
+
         for day in 1..=100 {
             let worker_days = village.worker_days();
-            
+
             // Survival-focused allocation
             let food_alloc = (worker_days * dec!(0.6)).min(worker_days);
             let wood_alloc = (worker_days * dec!(0.3)).min(worker_days - food_alloc);
             let construction_alloc = worker_days - food_alloc - wood_alloc;
-            
+
             village.update(alloc(
                 wood_alloc.to_f64().unwrap(),
                 food_alloc.to_f64().unwrap(),
                 construction_alloc.to_f64().unwrap(),
             ));
-            
+
             // Check if population has stabilized around sustainable level
             if day > 50 && village.workers.len() <= 10 {
                 population_stable = true;
@@ -728,7 +727,7 @@ mod tests {
             "Population didn't stabilize to sustainable level: {} workers remain",
             village.workers.len()
         );
-        
+
         // Should maintain some workers (not complete extinction)
         assert!(
             village.workers.len() > 0,
@@ -742,7 +741,7 @@ mod tests {
         let mut wood_village = Village::new(0, (20, 10), (5, 5), 10, 2);
         wood_village.wood = dec!(50.0);
         wood_village.food = dec!(20.0);
-        
+
         let mut food_village = Village::new(1, (5, 5), (20, 10), 10, 2);
         food_village.wood = dec!(20.0);
         food_village.food = dec!(50.0);
@@ -757,7 +756,7 @@ mod tests {
                 0.0,
             ));
 
-            // Food village focuses on food production  
+            // Food village focuses on food production
             let food_worker_days = food_village.worker_days();
             food_village.update(alloc(
                 (food_worker_days * dec!(0.2)).to_f64().unwrap(),
@@ -784,7 +783,7 @@ mod tests {
             food_village.workers.len() > 0,
             "Food village died despite trading"
         );
-        
+
         // Check that specialization is maintained
         assert!(
             wood_village.wood > wood_village.food,
@@ -825,7 +824,7 @@ mod tests {
         // Recovery phase - 100 days
         for _ in 1..=100 {
             let worker_days = village.worker_days();
-            
+
             // Focus on recovery: wood for repairs, food for survival
             village.update(alloc(
                 (worker_days * dec!(0.5)).to_f64().unwrap(),
@@ -839,9 +838,11 @@ mod tests {
             village.workers.len() > village.workers.len() / 2,
             "Village didn't recover population after disaster"
         );
-        
+
         // Houses should be repaired
-        let damaged_houses = village.houses.iter()
+        let damaged_houses = village
+            .houses
+            .iter()
             .filter(|h| h.maintenance_level < dec!(0.0))
             .count();
         assert!(
@@ -850,12 +851,12 @@ mod tests {
         );
     }
 
-    #[test] 
+    #[test]
     fn test_worker_productivity_impact() {
         // Test how worker conditions affect overall productivity
         let mut healthy_village = village_with_slots((10, 10), (10, 10), 10, 3);
         let mut struggling_village = village_with_slots((10, 10), (10, 10), 10, 1);
-        
+
         healthy_village.wood = dec!(100.0);
         healthy_village.food = dec!(100.0);
         struggling_village.wood = dec!(10.0);
@@ -868,28 +869,31 @@ mod tests {
         for _ in 1..=10 {
             let healthy_wd = healthy_village.worker_days();
             let struggling_wd = struggling_village.worker_days();
-            
+
             // Same allocation strategy
             healthy_village.update(alloc(
                 (healthy_wd * dec!(0.5)).to_f64().unwrap(),
                 (healthy_wd * dec!(0.5)).to_f64().unwrap(),
                 0.0,
             ));
-            
+
             struggling_village.update(alloc(
                 (struggling_wd * dec!(0.5)).to_f64().unwrap(),
                 (struggling_wd * dec!(0.5)).to_f64().unwrap(),
                 0.0,
             ));
-            
+
             healthy_production += healthy_wd;
             struggling_production += struggling_wd;
         }
 
         // Healthy village should have higher productivity per worker
-        let healthy_avg = healthy_production / dec!(10.0) / Decimal::from(healthy_village.workers.len());
-        let struggling_avg = struggling_production / dec!(10.0) / Decimal::from(struggling_village.workers.len().max(1));
-        
+        let healthy_avg =
+            healthy_production / dec!(10.0) / Decimal::from(healthy_village.workers.len());
+        let struggling_avg = struggling_production
+            / dec!(10.0)
+            / Decimal::from(struggling_village.workers.len().max(1));
+
         assert!(
             healthy_avg > struggling_avg,
             "Healthy workers not more productive: {:.2} vs {:.2}",

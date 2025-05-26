@@ -12,7 +12,8 @@
       "Bash(mkdir:*)",
       "Bash(git add:*)",
       "Bash(cargo clippy:*)",
-      "Bash(cargo fmt:*)"
+      "Bash(cargo fmt:*)",
+      "Bash(chmod:*)"
     ],
     "deny": []
   }
