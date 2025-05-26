@@ -2,16 +2,14 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use std::process;
-use std::collections::HashMap;
 use village_model::{
-    auction::{FinalFill, run_auction},
-    auction_builder::AuctionBuilder,
+    Auction,
+    auction::{FinalFill, OrderType},
     core::{Allocation, House, Village, Worker},
-    events::{ConsumptionPurpose, DeathCause, EventLogger, EventType, TradeSide},
+    events::{ConsumptionPurpose, DeathCause, EventLogger, EventType, ResourceType, TradeSide},
     metrics::MetricsCalculator,
     scenario::{VillageConfig, create_standard_scenarios},
     strategies,
-    types::{OrderRequest, ResourceType, ResourceTypeExt, VillageId},
     ui::run_ui,
 };
 
@@ -363,45 +361,40 @@ fn produced(slots: (u32, u32), units_per_slot: Decimal, worker_days: Decimal) ->
 
 fn apply_trades(
     villages: &mut [Village],
-    village_ids: &HashMap<String, VillageId>,
     fills: &[FinalFill],
     logger: &mut EventLogger,
     tick: usize,
 ) {
+    use village_model::auction::OrderType;
+
     // Process each fill
     for fill in fills {
         // Find the village by matching participant ID
+        // The participant ID is created by hashing the village ID string
         let village = villages.iter_mut().find(|v| {
-            if let Some(vid) = village_ids.get(&v.id_str) {
-                fill.participant_id.0 == vid.to_participant_id()
-            } else {
-                false
-            }
+            let id_num = v
+                .id_str
+                .bytes()
+                .fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+            fill.participant_id.0 == id_num
         });
-        
+
         if let Some(village) = village {
             let quantity_dec = Decimal::from(fill.filled_quantity);
             let total_value = quantity_dec * fill.price;
-            
-            // Parse resource type
-            let resource = ResourceType::from_str(&fill.resource_id.0)
-                .unwrap_or(ResourceType::Wood);
-            
-            // Update resources based on order type
-            match &fill.order_type {
-                village_model::auction::OrderType::Bid => {
-                    // Buying: spend money, gain resource
+
+            // Update resources based on order type and resource
+            match (&fill.order_type, fill.resource_id.0.as_str()) {
+                (OrderType::Bid, "wood") => {
+                    // Buying wood: spend money, gain wood
                     village.money -= total_value;
-                    match resource {
-                        ResourceType::Wood => village.wood += quantity_dec,
-                        ResourceType::Food => village.food += quantity_dec,
-                    }
-                    
+                    village.wood += quantity_dec;
+
                     logger.log(
                         tick,
                         village.id_str.clone(),
                         EventType::TradeExecuted {
-                            resource,
+                            resource: ResourceType::Wood,
                             quantity: quantity_dec,
                             price: fill.price,
                             counterparty: "market".to_string(),
@@ -409,19 +402,16 @@ fn apply_trades(
                         },
                     );
                 }
-                village_model::auction::OrderType::Ask => {
-                    // Selling: gain money, lose resource
+                (OrderType::Ask, "wood") => {
+                    // Selling wood: gain money, lose wood
                     village.money += total_value;
-                    match resource {
-                        ResourceType::Wood => village.wood -= quantity_dec,
-                        ResourceType::Food => village.food -= quantity_dec,
-                    }
-                    
+                    village.wood -= quantity_dec;
+
                     logger.log(
                         tick,
                         village.id_str.clone(),
                         EventType::TradeExecuted {
-                            resource,
+                            resource: ResourceType::Wood,
                             quantity: quantity_dec,
                             price: fill.price,
                             counterparty: "market".to_string(),
@@ -429,9 +419,52 @@ fn apply_trades(
                         },
                     );
                 }
+                (OrderType::Bid, "food") => {
+                    // Buying food: spend money, gain food
+                    village.money -= total_value;
+                    village.food += quantity_dec;
+
+                    logger.log(
+                        tick,
+                        village.id_str.clone(),
+                        EventType::TradeExecuted {
+                            resource: ResourceType::Food,
+                            quantity: quantity_dec,
+                            price: fill.price,
+                            counterparty: "market".to_string(),
+                            side: TradeSide::Buy,
+                        },
+                    );
+                }
+                (OrderType::Ask, "food") => {
+                    // Selling food: gain money, lose food
+                    village.money += total_value;
+                    village.food -= quantity_dec;
+
+                    logger.log(
+                        tick,
+                        village.id_str.clone(),
+                        EventType::TradeExecuted {
+                            resource: ResourceType::Food,
+                            quantity: quantity_dec,
+                            price: fill.price,
+                            counterparty: "market".to_string(),
+                            side: TradeSide::Sell,
+                        },
+                    );
+                }
+                _ => {} // Unknown resource type
             }
         }
     }
+}
+
+// Structure to hold all orders from a strategy decision
+struct VillageOrders {
+    wood_bid: Option<(Decimal, u32)>,
+    wood_ask: Option<(Decimal, u32)>,
+    food_bid: Option<(Decimal, u32)>,
+    food_ask: Option<(Decimal, u32)>,
 }
 
 // Adapter to bridge between the new strategies module and village decisions
@@ -443,12 +476,12 @@ impl StrategyAdapter {
     fn new(strategy: Box<dyn strategies::Strategy>) -> Self {
         Self { inner: strategy }
     }
-    
+
     fn get_allocation_and_orders(
         &self,
         village: &Village,
         market_state: &strategies::MarketState,
-    ) -> (Allocation, Vec<OrderRequest>) {
+    ) -> (Allocation, VillageOrders) {
         // Convert Village to strategies::VillageState
         let village_state = strategies::VillageState {
             id: village.id_str.clone(),
@@ -486,44 +519,13 @@ impl StrategyAdapter {
             house_construction: decision.allocation.construction,
         };
 
-        // Convert orders to requests
-        let mut orders = Vec::new();
-        
-        if let Some((price, quantity)) = decision.wood_bid {
-            orders.push(OrderRequest {
-                resource: ResourceType::Wood,
-                is_buy: true,
-                quantity,
-                price,
-            });
-        }
-        
-        if let Some((price, quantity)) = decision.wood_ask {
-            orders.push(OrderRequest {
-                resource: ResourceType::Wood,
-                is_buy: false,
-                quantity,
-                price,
-            });
-        }
-        
-        if let Some((price, quantity)) = decision.food_bid {
-            orders.push(OrderRequest {
-                resource: ResourceType::Food,
-                is_buy: true,
-                quantity,
-                price,
-            });
-        }
-        
-        if let Some((price, quantity)) = decision.food_ask {
-            orders.push(OrderRequest {
-                resource: ResourceType::Food,
-                is_buy: false,
-                quantity,
-                price,
-            });
-        }
+        // Package all orders
+        let orders = VillageOrders {
+            wood_bid: decision.wood_bid,
+            wood_ask: decision.wood_ask,
+            food_bid: decision.food_bid,
+            food_ask: decision.food_ask,
+        };
 
         (allocation, orders)
     }
@@ -582,7 +584,7 @@ fn main() {
             }
         }
         Some("run") | None => {
-            // Run simulation (default command)
+            // Run simulation (default behavior)
             run_simulation(strategy_names, scenario_name, scenario_file);
         }
         Some(cmd) => {
@@ -594,33 +596,41 @@ fn main() {
 }
 
 fn print_help() {
-    println!("\nVillage Model Simulation\n");
+    println!("Village Model Simulation");
+    println!();
     println!("USAGE:");
-    println!("    village-model-sim [COMMAND] [OPTIONS]\n");
+    println!("    village-model-sim [COMMAND] [OPTIONS]");
+    println!();
     println!("COMMANDS:");
     println!("    run              Run the simulation (default)");
     println!("    ui [FILE]        View simulation events in TUI");
-    println!("                     (default: simulation_events.json)\n");
+    println!("                     (default: simulation_events.json)");
+    println!();
     println!("OPTIONS:");
     println!("    -s, --strategy <NAME>    Strategy for villages (can be used multiple times)");
     println!("                            Available: default, survival, growth, trading,");
     println!("                            balanced, greedy");
     println!("    --scenario <NAME>        Use a built-in scenario (default: basic)");
     println!("    --scenario-file <FILE>   Load scenario from JSON file");
-    println!("    -h, --help              Print help information\n");
+    println!("    -h, --help              Print help information");
+    println!();
     println!("UI CONTROLS:");
     println!("    Space            Pause/Resume playback");
     println!("    ←/→              Step backward/forward through events");
     println!("    Home/End         Jump to beginning/end");
     println!("    +/-              Faster/slower playback (adjust seconds per tick)");
-    println!("    Q                Quit\n");
+    println!("    Q                Quit");
+    println!();
     println!("EXAMPLES:");
     println!("    # Run simulation with default strategies");
-    println!("    village-model-sim run\n");
+    println!("    village-model-sim run");
+    println!();
     println!("    # Run with specific strategies for villages");
-    println!("    village-model-sim run -s survival -s growth -s trading_wood\n");
+    println!("    village-model-sim run -s survival -s growth -s trading_wood");
+    println!();
     println!("    # Run with a specific scenario");
-    println!("    village-model-sim run --scenario competitive\n");
+    println!("    village-model-sim run --scenario competitive");
+    println!();
     println!("    # View the simulation in TUI");
     println!("    village-model-sim ui");
 }
@@ -671,11 +681,8 @@ fn run_simulation(
         .map(|(i, config)| village_from_config(i, config))
         .collect();
 
-    // Create village ID mapping
-    let village_ids: HashMap<String, VillageId> = villages
-        .iter()
-        .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-        .collect();
+    // Initialize event logger
+    let mut logger = EventLogger::new();
 
     // Track initial populations for metrics
     let village_configs: Vec<(String, usize)> = villages
@@ -727,7 +734,6 @@ fn run_simulation(
             .map(|(i, v)| {
                 let strategy_name = &strategy_names[i % strategy_names.len()];
                 println!("  {}: {}", v.id_str, strategy_name);
-
                 let village_state = strategies::VillageState {
                     id: v.id_str.clone(),
                     workers: v.workers.len(),
@@ -753,24 +759,17 @@ fn run_simulation(
             .collect()
     };
 
-    // Create event logger
-    let mut logger = EventLogger::new();
-
     // Track last clearing prices for strategies
-    let mut last_clearing_prices = HashMap::<village_model::auction::ResourceId, Decimal>::new();
+    let mut last_clearing_prices = std::collections::HashMap::<String, Decimal>::new();
 
     // Run simulation
     for tick in 0..scenario.parameters.days_to_simulate {
-        let mut auction_builder = AuctionBuilder::new();
+        let mut auction = Auction::new(10);
 
         // Create market state from last clearing prices
         let market_state = strategies::MarketState {
-            last_wood_price: last_clearing_prices
-                .get(&village_model::auction::ResourceId("wood".to_string()))
-                .cloned(),
-            last_food_price: last_clearing_prices
-                .get(&village_model::auction::ResourceId("food".to_string()))
-                .cloned(),
+            last_wood_price: last_clearing_prices.get("wood").cloned(),
+            last_food_price: last_clearing_prices.get("food").cloned(),
             wood_bids: vec![], // TODO: Could populate from previous tick
             wood_asks: vec![],
             food_bids: vec![],
@@ -778,6 +777,7 @@ fn run_simulation(
         };
 
         // Strategy phase
+        let mut order_id_counter = 0;
         for (village_idx, village) in villages.iter_mut().enumerate() {
             // Get allocation and orders from strategy
             let (allocation, orders) =
@@ -786,50 +786,132 @@ fn run_simulation(
             // Update village with event logging
             update_village(village, allocation, &mut logger, tick);
 
-            // Add village to auction
-            let village_id = &village_ids[&village.id_str];
-            auction_builder.add_village(village_id, village.money);
+            // Add auction participant
+            auction.add_participant(&village.id_str, village.money);
 
-            // Add orders to auction
-            for order in orders {
-                // Log order
-                logger.log(
-                    tick,
-                    village.id_str.clone(),
-                    EventType::OrderPlaced {
-                        resource: order.resource,
-                        quantity: order.quantity.into(),
-                        price: order.price,
-                        side: if order.is_buy { TradeSide::Buy } else { TradeSide::Sell },
-                        order_id: format!(
-                            "{}_{}_{}_{}", 
-                            village.id_str, 
-                            order.resource.as_str(),
-                            if order.is_buy { "bid" } else { "ask" },
-                            tick
-                        ),
-                    },
-                );
-                
-                auction_builder.add_order(village_id, order);
+            // Add wood bid
+            if let Some((price, quantity)) = orders.wood_bid {
+                if quantity > 0 {
+                    logger.log(
+                        tick,
+                        village.id_str.clone(),
+                        EventType::OrderPlaced {
+                            resource: ResourceType::Wood,
+                            quantity: Decimal::from(quantity),
+                            price,
+                            side: TradeSide::Buy,
+                            order_id: format!("{}_wood_bid_{}", village.id_str, tick),
+                        },
+                    );
+
+                    auction.add_order(
+                        order_id_counter,
+                        &village.id_str,
+                        "wood",
+                        OrderType::Bid,
+                        quantity as u64,
+                        price,
+                        tick as u64,
+                    );
+                    order_id_counter += 1;
+                }
+            }
+
+            // Add wood ask
+            if let Some((price, quantity)) = orders.wood_ask {
+                if quantity > 0 {
+                    logger.log(
+                        tick,
+                        village.id_str.clone(),
+                        EventType::OrderPlaced {
+                            resource: ResourceType::Wood,
+                            quantity: Decimal::from(quantity),
+                            price,
+                            side: TradeSide::Sell,
+                            order_id: format!("{}_wood_ask_{}", village.id_str, tick),
+                        },
+                    );
+
+                    auction.add_order(
+                        order_id_counter,
+                        &village.id_str,
+                        "wood",
+                        OrderType::Ask,
+                        quantity as u64,
+                        price,
+                        tick as u64,
+                    );
+                    order_id_counter += 1;
+                }
+            }
+
+            // Add food bid
+            if let Some((price, quantity)) = orders.food_bid {
+                if quantity > 0 {
+                    logger.log(
+                        tick,
+                        village.id_str.clone(),
+                        EventType::OrderPlaced {
+                            resource: ResourceType::Food,
+                            quantity: Decimal::from(quantity),
+                            price,
+                            side: TradeSide::Buy,
+                            order_id: format!("{}_food_bid_{}", village.id_str, tick),
+                        },
+                    );
+
+                    auction.add_order(
+                        order_id_counter,
+                        &village.id_str,
+                        "food",
+                        OrderType::Bid,
+                        quantity as u64,
+                        price,
+                        tick as u64,
+                    );
+                    order_id_counter += 1;
+                }
+            }
+
+            // Add food ask
+            if let Some((price, quantity)) = orders.food_ask {
+                if quantity > 0 {
+                    logger.log(
+                        tick,
+                        village.id_str.clone(),
+                        EventType::OrderPlaced {
+                            resource: ResourceType::Food,
+                            quantity: Decimal::from(quantity),
+                            price,
+                            side: TradeSide::Sell,
+                            order_id: format!("{}_food_ask_{}", village.id_str, tick),
+                        },
+                    );
+
+                    auction.add_order(
+                        order_id_counter,
+                        &village.id_str,
+                        "food",
+                        OrderType::Ask,
+                        quantity as u64,
+                        price,
+                        tick as u64,
+                    );
+                    order_id_counter += 1;
+                }
             }
         }
 
         // Run auction and process trades
-        let (orders, participants) = auction_builder.build();
-        let auction_result = run_auction(
-            orders,
-            participants,
-            10, // max iterations
-            last_clearing_prices.clone(),
-        );
-        
+        let auction_result = auction.run();
         if let Ok(success) = auction_result {
             // Update last clearing prices for next tick
-            last_clearing_prices = success.clearing_prices.clone();
+            for (resource_id, price) in &success.clearing_prices {
+                last_clearing_prices.insert(resource_id.0.clone(), *price);
+            }
 
             // Apply trades to villages
-            apply_trades(&mut villages, &village_ids, &success.final_fills, &mut logger, tick);
+            apply_trades(&mut villages, &success.final_fills, &mut logger, tick);
         }
 
         // Check for early termination if all villages are dead
@@ -838,11 +920,6 @@ fn run_simulation(
             break;
         }
     }
-
-    // Save events
-    let filename = "simulation_events.json";
-    logger.save_to_file(filename).unwrap();
-    println!("\nEvents saved to {}", filename);
 
     // Calculate and display metrics
     let metrics = MetricsCalculator::calculate_scenario_metrics(
@@ -857,6 +934,13 @@ fn run_simulation(
     for village_metrics in metrics.villages.values() {
         println!("\n{}", village_metrics);
     }
+
+    // Save events to file
+    if let Err(e) = logger.save_to_file("simulation_events.json") {
+        eprintln!("Failed to save events: {}", e);
+    } else {
+        println!("\nEvents saved to simulation_events.json");
+    }
 }
 
 #[cfg(test)]
@@ -869,20 +953,17 @@ mod tests {
     fn test_apply_trades_wood_buy() {
         let mut villages = vec![create_village(0, (2, 1), (2, 1), 5, 1)];
         let mut logger = EventLogger::new();
-        
-        let village_ids: HashMap<String, VillageId> = villages
-            .iter()
-            .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-            .collect();
 
         // Create a fill for buying wood
         let fills = vec![FinalFill {
             order_id: village_model::auction::OrderId(1),
             participant_id: village_model::auction::ParticipantId(
-                village_ids["village_0"].to_participant_id()
+                "village_0"
+                    .bytes()
+                    .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
             ),
             resource_id: village_model::auction::ResourceId("wood".to_string()),
-            order_type: village_model::auction::OrderType::Bid,
+            order_type: OrderType::Bid,
             filled_quantity: 10,
             price: dec!(15.0),
         }];
@@ -890,7 +971,7 @@ mod tests {
         let initial_wood = villages[0].wood;
         let initial_money = villages[0].money;
 
-        apply_trades(&mut villages, &village_ids, &fills, &mut logger, 0);
+        apply_trades(&mut villages, &fills, &mut logger, 0);
 
         // Should have gained 10 wood and lost 150 money
         assert_eq!(villages[0].wood, initial_wood + dec!(10));
@@ -901,20 +982,17 @@ mod tests {
     fn test_apply_trades_wood_sell() {
         let mut villages = vec![create_village(0, (2, 1), (2, 1), 5, 1)];
         let mut logger = EventLogger::new();
-        
-        let village_ids: HashMap<String, VillageId> = villages
-            .iter()
-            .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-            .collect();
 
         // Create a fill for selling wood
         let fills = vec![FinalFill {
             order_id: village_model::auction::OrderId(1),
             participant_id: village_model::auction::ParticipantId(
-                village_ids["village_0"].to_participant_id()
+                "village_0"
+                    .bytes()
+                    .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
             ),
             resource_id: village_model::auction::ResourceId("wood".to_string()),
-            order_type: village_model::auction::OrderType::Ask,
+            order_type: OrderType::Ask,
             filled_quantity: 5,
             price: dec!(20.0),
         }];
@@ -922,7 +1000,7 @@ mod tests {
         let initial_wood = villages[0].wood;
         let initial_money = villages[0].money;
 
-        apply_trades(&mut villages, &village_ids, &fills, &mut logger, 0);
+        apply_trades(&mut villages, &fills, &mut logger, 0);
 
         // Should have lost 5 wood and gained 100 money
         assert_eq!(villages[0].wood, initial_wood - dec!(5));
@@ -933,20 +1011,17 @@ mod tests {
     fn test_apply_trades_food_buy() {
         let mut villages = vec![create_village(0, (2, 1), (2, 1), 5, 1)];
         let mut logger = EventLogger::new();
-        
-        let village_ids: HashMap<String, VillageId> = villages
-            .iter()
-            .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-            .collect();
 
         // Create a fill for buying food
         let fills = vec![FinalFill {
             order_id: village_model::auction::OrderId(1),
             participant_id: village_model::auction::ParticipantId(
-                village_ids["village_0"].to_participant_id()
+                "village_0"
+                    .bytes()
+                    .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
             ),
             resource_id: village_model::auction::ResourceId("food".to_string()),
-            order_type: village_model::auction::OrderType::Bid,
+            order_type: OrderType::Bid,
             filled_quantity: 8,
             price: dec!(12.0),
         }];
@@ -954,7 +1029,7 @@ mod tests {
         let initial_food = villages[0].food;
         let initial_money = villages[0].money;
 
-        apply_trades(&mut villages, &village_ids, &fills, &mut logger, 0);
+        apply_trades(&mut villages, &fills, &mut logger, 0);
 
         // Should have gained 8 food and lost 96 money
         assert_eq!(villages[0].food, initial_food + dec!(8));
@@ -965,20 +1040,17 @@ mod tests {
     fn test_apply_trades_food_sell() {
         let mut villages = vec![create_village(0, (2, 1), (2, 1), 5, 1)];
         let mut logger = EventLogger::new();
-        
-        let village_ids: HashMap<String, VillageId> = villages
-            .iter()
-            .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-            .collect();
 
         // Create a fill for selling food
         let fills = vec![FinalFill {
             order_id: village_model::auction::OrderId(1),
             participant_id: village_model::auction::ParticipantId(
-                village_ids["village_0"].to_participant_id()
+                "village_0"
+                    .bytes()
+                    .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
             ),
             resource_id: village_model::auction::ResourceId("food".to_string()),
-            order_type: village_model::auction::OrderType::Ask,
+            order_type: OrderType::Ask,
             filled_quantity: 15,
             price: dec!(10.0),
         }];
@@ -986,7 +1058,7 @@ mod tests {
         let initial_food = villages[0].food;
         let initial_money = villages[0].money;
 
-        apply_trades(&mut villages, &village_ids, &fills, &mut logger, 0);
+        apply_trades(&mut villages, &fills, &mut logger, 0);
 
         // Should have lost 15 food and gained 150 money
         assert_eq!(villages[0].food, initial_food - dec!(15));
@@ -1000,11 +1072,6 @@ mod tests {
             create_village(1, (2, 1), (2, 1), 5, 1),
         ];
         let mut logger = EventLogger::new();
-        
-        let village_ids: HashMap<String, VillageId> = villages
-            .iter()
-            .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-            .collect();
 
         // Create fills for multiple trades
         let fills = vec![
@@ -1012,10 +1079,12 @@ mod tests {
             FinalFill {
                 order_id: village_model::auction::OrderId(1),
                 participant_id: village_model::auction::ParticipantId(
-                    village_ids["village_0"].to_participant_id()
+                    "village_0"
+                        .bytes()
+                        .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
                 ),
                 resource_id: village_model::auction::ResourceId("wood".to_string()),
-                order_type: village_model::auction::OrderType::Bid,
+                order_type: OrderType::Bid,
                 filled_quantity: 10,
                 price: dec!(15.0),
             },
@@ -1023,10 +1092,12 @@ mod tests {
             FinalFill {
                 order_id: village_model::auction::OrderId(2),
                 participant_id: village_model::auction::ParticipantId(
-                    village_ids["village_1"].to_participant_id()
+                    "village_1"
+                        .bytes()
+                        .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
                 ),
                 resource_id: village_model::auction::ResourceId("wood".to_string()),
-                order_type: village_model::auction::OrderType::Ask,
+                order_type: OrderType::Ask,
                 filled_quantity: 10,
                 price: dec!(15.0),
             },
@@ -1034,10 +1105,12 @@ mod tests {
             FinalFill {
                 order_id: village_model::auction::OrderId(3),
                 participant_id: village_model::auction::ParticipantId(
-                    village_ids["village_0"].to_participant_id()
+                    "village_0"
+                        .bytes()
+                        .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
                 ),
                 resource_id: village_model::auction::ResourceId("food".to_string()),
-                order_type: village_model::auction::OrderType::Ask,
+                order_type: OrderType::Ask,
                 filled_quantity: 5,
                 price: dec!(20.0),
             },
@@ -1045,10 +1118,12 @@ mod tests {
             FinalFill {
                 order_id: village_model::auction::OrderId(4),
                 participant_id: village_model::auction::ParticipantId(
-                    village_ids["village_1"].to_participant_id()
+                    "village_1"
+                        .bytes()
+                        .fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
                 ),
                 resource_id: village_model::auction::ResourceId("food".to_string()),
-                order_type: village_model::auction::OrderType::Bid,
+                order_type: OrderType::Bid,
                 filled_quantity: 5,
                 price: dec!(20.0),
             },
@@ -1061,7 +1136,7 @@ mod tests {
         let v1_initial_food = villages[1].food;
         let v1_initial_money = villages[1].money;
 
-        apply_trades(&mut villages, &village_ids, &fills, &mut logger, 0);
+        apply_trades(&mut villages, &fills, &mut logger, 0);
 
         // Village 0: +10 wood (-150 money), -5 food (+100 money) = net -50 money
         assert_eq!(villages[0].wood, v0_initial_wood + dec!(10));
@@ -1078,18 +1153,13 @@ mod tests {
     fn test_apply_trades_no_matching_village() {
         let mut villages = vec![create_village(0, (2, 1), (2, 1), 5, 1)];
         let mut logger = EventLogger::new();
-        
-        let village_ids: HashMap<String, VillageId> = villages
-            .iter()
-            .map(|v| (v.id_str.clone(), VillageId::new(&v.id_str)))
-            .collect();
 
         // Create a fill for a non-existent village
         let fills = vec![FinalFill {
             order_id: village_model::auction::OrderId(1),
             participant_id: village_model::auction::ParticipantId(999), // Non-existent
             resource_id: village_model::auction::ResourceId("wood".to_string()),
-            order_type: village_model::auction::OrderType::Bid,
+            order_type: OrderType::Bid,
             filled_quantity: 10,
             price: dec!(15.0),
         }];
@@ -1097,7 +1167,7 @@ mod tests {
         let initial_wood = villages[0].wood;
         let initial_money = villages[0].money;
 
-        apply_trades(&mut villages, &village_ids, &fills, &mut logger, 0);
+        apply_trades(&mut villages, &fills, &mut logger, 0);
 
         // Village 0 should be unchanged
         assert_eq!(villages[0].wood, initial_wood);
