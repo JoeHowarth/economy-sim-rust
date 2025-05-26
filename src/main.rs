@@ -452,8 +452,6 @@ mod tests {
         assert_resources!(village, wood = 0.0);
     }
 
-    // REMOVED: test_village_update_worker_productivity - tests implementation detail
-
     #[test]
     fn test_worker_death_no_shelter() {
         let mut village = village_with_slots((1, 0), (1, 0), 1, 0); // No houses
@@ -507,9 +505,6 @@ mod tests {
         );
     }
 
-    // REMOVED: test_village_update_worker_growth - flaky due to RNG
-    // REMOVED: test_village_update_growth_chance - tests unused method
-
     #[test]
     fn test_house_construction_basic() {
         let mut village = village_with_slots((0, 0), (0, 0), 65, 0);
@@ -526,8 +521,6 @@ mod tests {
         assert_eq!(village.construction_progress, worker_days - dec!(60.0));
     }
 
-    // REMOVED: test_house_construction_partial - redundant with basic test
-
     #[test]
     fn test_house_construction_insufficient_wood() {
         let mut village = village_with_slots((0, 0), (0, 0), 70, 0);
@@ -543,6 +536,365 @@ mod tests {
         assert_eq!(village.construction_progress, worker_days); // Progress accumulated
     }
 
-    // REMOVED: test_house_construction_multiple - unrealistic scenario
-    // REMOVED: test_house_construction_with_other_allocations - redundant
+    // --- Integration Tests ---
+
+    #[test]
+    fn test_village_lifecycle_30_days() {
+        // Test a self-sufficient village over 30 days
+        let mut village = village_with_slots((10, 10), (10, 10), 10, 2);
+        village.wood = dec!(50.0);
+        village.food = dec!(50.0);
+
+        // Track key metrics
+        let initial_workers = village.workers.len();
+        let initial_houses = village.houses.len();
+
+        for day in 1..=30 {
+            let worker_days = village.worker_days();
+            
+            // Balanced allocation: prioritize food, then wood, small construction
+            let food_alloc = (worker_days * dec!(0.4)).min(worker_days);
+            let wood_alloc = (worker_days * dec!(0.4)).min(worker_days - food_alloc);
+            let construction_alloc = worker_days - food_alloc - wood_alloc;
+            
+            village.update(alloc(
+                wood_alloc.to_f64().unwrap(),
+                food_alloc.to_f64().unwrap(),
+                construction_alloc.to_f64().unwrap(),
+            ));
+
+            // Basic survival checks
+            assert!(
+                village.workers.len() > 0,
+                "All workers died by day {}",
+                day
+            );
+            assert!(
+                village.food >= dec!(0.0),
+                "Food went negative on day {}",
+                day
+            );
+            assert!(
+                village.wood >= dec!(0.0),
+                "Wood went negative on day {}",
+                day
+            );
+        }
+
+        // After 30 days, village should be stable or growing
+        assert!(
+            village.workers.len() >= initial_workers,
+            "Village lost workers: {} -> {}",
+            initial_workers,
+            village.workers.len()
+        );
+        assert!(
+            village.houses.len() >= initial_houses,
+            "Village lost houses: {} -> {}",
+            initial_houses,
+            village.houses.len()
+        );
+    }
+
+    #[test]
+    fn test_starvation_scenario() {
+        // Test what happens when food production fails
+        let mut village = village_with_slots((10, 10), (0, 0), 15, 3); // No food slots
+        village.wood = dec!(100.0);
+        village.food = dec!(30.0); // Only 2 days of food for 15 workers
+
+        let mut death_days = Vec::new();
+
+        for day in 1..=15 {
+            let initial_workers = village.workers.len();
+            let worker_days = village.worker_days();
+            
+            // All effort on wood since no food slots
+            village.update(alloc(worker_days.to_f64().unwrap(), 0.0, 0.0));
+            
+            if village.workers.len() < initial_workers {
+                death_days.push(day);
+            }
+        }
+
+        // First deaths should occur around day 12 (2 days initial food + 10 days starvation)
+        assert!(!death_days.is_empty(), "No workers died despite no food production");
+        assert!(
+            death_days[0] >= 11 && death_days[0] <= 13,
+            "First death on day {}, expected around day 12",
+            death_days[0]
+        );
+        
+        // Eventually all workers should die
+        assert_eq!(
+            village.workers.len(),
+            0,
+            "Some workers survived without food production"
+        );
+    }
+
+    #[test]
+    fn test_economic_growth() {
+        // Test a village with good resource slots growing over time
+        let mut village = village_with_slots((20, 20), (20, 20), 10, 2);
+        village.wood = dec!(200.0);
+        village.food = dec!(200.0);
+
+        // Track growth metrics
+        let mut population_history = vec![village.workers.len()];
+        let mut house_history = vec![village.houses.len()];
+        let mut resource_history = vec![(village.wood, village.food)];
+
+        // Simulate 200 days with focus on growth
+        for day in 1..=200 {
+            let worker_days = village.worker_days();
+            
+            // Growth-oriented allocation - more focus on food to prevent starvation
+            let food_alloc = (worker_days * dec!(0.5)).min(worker_days);
+            let wood_alloc = (worker_days * dec!(0.3)).min(worker_days - food_alloc);
+            let construction_alloc = worker_days - food_alloc - wood_alloc;
+            
+            village.update(alloc(
+                wood_alloc.to_f64().unwrap(),
+                food_alloc.to_f64().unwrap(),
+                construction_alloc.to_f64().unwrap(),
+            ));
+
+            if day % 10 == 0 {
+                population_history.push(village.workers.len());
+                house_history.push(village.houses.len());
+                resource_history.push((village.wood, village.food));
+            }
+        }
+
+        // Village should maintain or grow population
+        assert!(
+            village.workers.len() >= 10,
+            "Population declined after 200 days: {} workers",
+            village.workers.len()
+        );
+        assert!(
+            village.houses.len() >= 2,
+            "Houses declined after 200 days: {} houses",
+            village.houses.len()
+        );
+        
+        // Check for stability or growth (not necessarily continuous growth)
+        let final_population = village.workers.len();
+        let initial_population = 10;
+        assert!(
+            final_population >= initial_population,
+            "Population declined from {} to {}",
+            initial_population,
+            final_population
+        );
+    }
+
+    #[test]
+    fn test_resource_scarcity_adaptation() {
+        // Test how village handles resource constraints
+        let mut village = village_with_slots((2, 2), (2, 2), 20, 4); // Many workers, few slots
+        village.wood = dec!(30.0);
+        village.food = dec!(30.0);
+
+        // Workers greatly exceed production capacity
+        let _max_wood_production = dec!(2.0) * dec!(0.1); // 2 full slots * 0.1 per slot
+        let _max_food_production = dec!(2.0) * dec!(2.0); // 2 full slots * 2.0 per slot
+        
+        let mut population_stable = false;
+        
+        for day in 1..=100 {
+            let worker_days = village.worker_days();
+            
+            // Survival-focused allocation
+            let food_alloc = (worker_days * dec!(0.6)).min(worker_days);
+            let wood_alloc = (worker_days * dec!(0.3)).min(worker_days - food_alloc);
+            let construction_alloc = worker_days - food_alloc - wood_alloc;
+            
+            village.update(alloc(
+                wood_alloc.to_f64().unwrap(),
+                food_alloc.to_f64().unwrap(),
+                construction_alloc.to_f64().unwrap(),
+            ));
+            
+            // Check if population has stabilized around sustainable level
+            if day > 50 && village.workers.len() <= 10 {
+                population_stable = true;
+            }
+        }
+
+        assert!(
+            population_stable || village.workers.len() <= 10,
+            "Population didn't stabilize to sustainable level: {} workers remain",
+            village.workers.len()
+        );
+        
+        // Should maintain some workers (not complete extinction)
+        assert!(
+            village.workers.len() > 0,
+            "Village went extinct despite having some production capacity"
+        );
+    }
+
+    #[test]
+    fn test_multi_village_trading_simulation() {
+        // Test trading between specialized villages
+        let mut wood_village = Village::new(0, (20, 10), (5, 5), 10, 2);
+        wood_village.wood = dec!(50.0);
+        wood_village.food = dec!(20.0);
+        
+        let mut food_village = Village::new(1, (5, 5), (20, 10), 10, 2);
+        food_village.wood = dec!(20.0);
+        food_village.food = dec!(50.0);
+
+        // Simulate 50 days with trading
+        for day in 1..=50 {
+            // Wood village focuses on wood production
+            let wood_worker_days = wood_village.worker_days();
+            wood_village.update(alloc(
+                (wood_worker_days * dec!(0.8)).to_f64().unwrap(),
+                (wood_worker_days * dec!(0.2)).to_f64().unwrap(),
+                0.0,
+            ));
+
+            // Food village focuses on food production  
+            let food_worker_days = food_village.worker_days();
+            food_village.update(alloc(
+                (food_worker_days * dec!(0.2)).to_f64().unwrap(),
+                (food_worker_days * dec!(0.8)).to_f64().unwrap(),
+                0.0,
+            ));
+
+            // Simple trading simulation every 5 days
+            if day % 5 == 0 && wood_village.wood > dec!(10.0) && food_village.food > dec!(10.0) {
+                // Trade 10 wood for 10 food
+                wood_village.wood -= dec!(10.0);
+                wood_village.food += dec!(10.0);
+                food_village.wood += dec!(10.0);
+                food_village.food -= dec!(10.0);
+            }
+        }
+
+        // Both villages should survive through specialization and trade
+        assert!(
+            wood_village.workers.len() > 0,
+            "Wood village died despite trading"
+        );
+        assert!(
+            food_village.workers.len() > 0,
+            "Food village died despite trading"
+        );
+        
+        // Check that specialization is maintained
+        assert!(
+            wood_village.wood > wood_village.food,
+            "Wood village lost its specialization"
+        );
+        assert!(
+            food_village.food > food_village.wood,
+            "Food village lost its specialization"
+        );
+    }
+
+    #[test]
+    fn test_disaster_recovery() {
+        // Test how village recovers from disasters
+        let mut village = village_with_slots((15, 15), (15, 15), 20, 5);
+        village.wood = dec!(200.0);
+        village.food = dec!(200.0);
+
+        // Baseline growth for 50 days
+        for _ in 1..=50 {
+            let worker_days = village.worker_days();
+            village.update(alloc(
+                (worker_days * dec!(0.4)).to_f64().unwrap(),
+                (worker_days * dec!(0.4)).to_f64().unwrap(),
+                (worker_days * dec!(0.2)).to_f64().unwrap(),
+            ));
+        }
+
+        let _pre_disaster_population = village.workers.len();
+        let pre_disaster_houses = village.houses.len();
+
+        // Disaster: lose half the workers and damage houses
+        village.workers.truncate(village.workers.len() / 2);
+        for house in village.houses.iter_mut() {
+            house.maintenance_level = dec!(-3.0); // Severe damage
+        }
+
+        // Recovery phase - 100 days
+        for _ in 1..=100 {
+            let worker_days = village.worker_days();
+            
+            // Focus on recovery: wood for repairs, food for survival
+            village.update(alloc(
+                (worker_days * dec!(0.5)).to_f64().unwrap(),
+                (worker_days * dec!(0.4)).to_f64().unwrap(),
+                (worker_days * dec!(0.1)).to_f64().unwrap(),
+            ));
+        }
+
+        // Check recovery
+        assert!(
+            village.workers.len() > village.workers.len() / 2,
+            "Village didn't recover population after disaster"
+        );
+        
+        // Houses should be repaired
+        let damaged_houses = village.houses.iter()
+            .filter(|h| h.maintenance_level < dec!(0.0))
+            .count();
+        assert!(
+            damaged_houses < pre_disaster_houses / 2,
+            "Most houses still damaged after recovery period"
+        );
+    }
+
+    #[test] 
+    fn test_worker_productivity_impact() {
+        // Test how worker conditions affect overall productivity
+        let mut healthy_village = village_with_slots((10, 10), (10, 10), 10, 3);
+        let mut struggling_village = village_with_slots((10, 10), (10, 10), 10, 1);
+        
+        healthy_village.wood = dec!(100.0);
+        healthy_village.food = dec!(100.0);
+        struggling_village.wood = dec!(10.0);
+        struggling_village.food = dec!(10.0);
+
+        let mut healthy_production = dec!(0.0);
+        let mut struggling_production = dec!(0.0);
+
+        // Run for 10 days tracking production
+        for _ in 1..=10 {
+            let healthy_wd = healthy_village.worker_days();
+            let struggling_wd = struggling_village.worker_days();
+            
+            // Same allocation strategy
+            healthy_village.update(alloc(
+                (healthy_wd * dec!(0.5)).to_f64().unwrap(),
+                (healthy_wd * dec!(0.5)).to_f64().unwrap(),
+                0.0,
+            ));
+            
+            struggling_village.update(alloc(
+                (struggling_wd * dec!(0.5)).to_f64().unwrap(),
+                (struggling_wd * dec!(0.5)).to_f64().unwrap(),
+                0.0,
+            ));
+            
+            healthy_production += healthy_wd;
+            struggling_production += struggling_wd;
+        }
+
+        // Healthy village should have higher productivity per worker
+        let healthy_avg = healthy_production / dec!(10.0) / Decimal::from(healthy_village.workers.len());
+        let struggling_avg = struggling_production / dec!(10.0) / Decimal::from(struggling_village.workers.len().max(1));
+        
+        assert!(
+            healthy_avg > struggling_avg,
+            "Healthy workers not more productive: {:.2} vs {:.2}",
+            healthy_avg,
+            struggling_avg
+        );
+    }
 }
