@@ -23,32 +23,13 @@ The auction system uses a proper iterative clearing algorithm that handles multi
 ## Running it
 
 ```bash
-cargo run --bin village-model-sim
+cargo run
 ```
-
-Fair warning: the main loop currently runs forever watching villages slowly starve. Working on more interesting scenarios.
-
-## Tests
-
-The test suite covers the essential mechanics without getting lost in implementation details:
-
-```bash
-cargo test
-```
-
-27 tests, all passing. Recently refactored to use Decimal types throughout because float arithmetic and economic simulation don't mix.
 
 ## Architecture Notes
 
-The separation between simulation logic (`main.rs`) and market mechanics (`auction.rs`) is clean. Villages make local decisions through a strategy trait. The auction runs as a separate system that could theoretically handle any tradeable resources.
-
-Currently the `apply_trades` function is stubbed - villages can discover prices but not actually exchange resources. Fixing this is next on the list.
-
-## Why?
-
-Sometimes you want to understand something by building it. Economics textbooks talk about supply and demand curves, but what do those curves look like when the suppliers might literally starve? How does price discovery work when budgets aren't just constraints but survival requirements?
-
-Also, Rust's type system makes it pleasant to model these kinds of domain problems. When you say a worker needs food or they die in 10 days, you can encode that invariant and trust it.
+The separation between simulation logic (`main.rs`) and market mechanics (`auction.rs`) is clean. Villages make local decisions through a strategy trait. 
+The auction runs as a separate system that could theoretically handle any tradeable resources.
 
 ## Status
 
