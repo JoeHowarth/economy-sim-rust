@@ -232,6 +232,34 @@ pub fn create_standard_scenarios() -> HashMap<String, Scenario> {
     });
     scenarios.insert("basic".to_string(), basic);
 
+    // Custom scenario that allows CLI strategy override
+    let mut custom = Scenario::new("custom".to_string());
+    custom.description = "Villages with CLI-specified strategies".to_string();
+    custom.parameters.days_to_simulate = 200;
+    custom.add_village(VillageConfig {
+        id: "village_1".to_string(),
+        initial_workers: 10,
+        initial_houses: 2,
+        initial_food: Decimal::from(50),
+        initial_wood: Decimal::from(50),
+        initial_money: Decimal::from(100),
+        food_slots: (10, 10),
+        wood_slots: (10, 10),
+        strategy: StrategyConfig::default(),
+    });
+    custom.add_village(VillageConfig {
+        id: "village_2".to_string(),
+        initial_workers: 10,
+        initial_houses: 2,
+        initial_food: Decimal::from(50),
+        initial_wood: Decimal::from(50),
+        initial_money: Decimal::from(100),
+        food_slots: (10, 10),
+        wood_slots: (10, 10),
+        strategy: StrategyConfig::default(),
+    });
+    scenarios.insert("custom".to_string(), custom);
+
     let mut scarcity = Scenario::new("resource_scarcity".to_string());
     scarcity.description = "Villages with limited production slots".to_string();
     scarcity.add_village(VillageConfig {
@@ -268,6 +296,40 @@ pub fn create_standard_scenarios() -> HashMap<String, Scenario> {
         },
     });
     scenarios.insert("growth".to_string(), growth);
+
+    // Trading scenario with specialized villages
+    let mut trading = Scenario::new("trading".to_string());
+    trading.description = "Villages specialized for trading".to_string();
+    trading.parameters.days_to_simulate = 150;
+    trading.add_village(VillageConfig {
+        id: "wood_specialist".to_string(),
+        initial_workers: 10,
+        initial_houses: 2,
+        initial_food: Decimal::from(30),
+        initial_wood: Decimal::from(80),
+        initial_money: Decimal::from(100),
+        food_slots: (5, 5),   // Poor food production
+        wood_slots: (20, 10), // Excellent wood production
+        strategy: StrategyConfig::Trading {
+            price_multiplier: 1.0,
+            max_trade_fraction: 0.5,
+        },
+    });
+    trading.add_village(VillageConfig {
+        id: "food_specialist".to_string(),
+        initial_workers: 10,
+        initial_houses: 2,
+        initial_food: Decimal::from(80),
+        initial_wood: Decimal::from(30),
+        initial_money: Decimal::from(100),
+        food_slots: (20, 10), // Excellent food production
+        wood_slots: (5, 5),   // Poor wood production
+        strategy: StrategyConfig::Trading {
+            price_multiplier: 1.0,
+            max_trade_fraction: 0.5,
+        },
+    });
+    scenarios.insert("trading".to_string(), trading);
 
     scenarios
 }

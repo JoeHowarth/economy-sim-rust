@@ -973,4 +973,147 @@ mod tests {
 
     // Other barter tests (partial fills, three-way) should also work correctly with Decimal
     // without needing f64 tolerance checks.
+
+    #[test]
+    fn test_multi_resource_clearing() {
+        // Test that auction can handle multiple resources independently
+        let orders = vec![
+            // Wood market
+            create_order(1, ALICE, "wood", OrderType::Bid, 10, dec!(15.0), 1),
+            create_order(2, BOB, "wood", OrderType::Ask, 10, dec!(12.0), 2),
+            // Food market
+            create_order(3, CAROL, "food", OrderType::Bid, 5, dec!(20.0), 3),
+            create_order(4, DAVID, "food", OrderType::Ask, 5, dec!(18.0), 4),
+        ];
+        let participants = create_participants(vec![
+            (ALICE, dec!(200.0)),
+            (BOB, dec!(200.0)),
+            (CAROL, dec!(200.0)),
+            (DAVID, dec!(200.0)),
+        ]);
+        let result = run_auction(orders, participants, 5, HashMap::new());
+
+        match result {
+            Ok(success) => {
+                // Should have clearing results for both resources
+                assert_eq!(success.clearing_prices.len(), 2);
+
+                // Check wood market cleared - auction chooses from submitted prices
+                let wood_price = success.clearing_prices[&ResourceId("wood".to_string())];
+                assert!(wood_price == dec!(12.0) || wood_price == dec!(15.0)); // Should be one of the submitted prices
+
+                // Check food market cleared - auction chooses from submitted prices
+                let food_price = success.clearing_prices[&ResourceId("food".to_string())];
+                assert!(food_price == dec!(18.0) || food_price == dec!(20.0)); // Should be one of the submitted prices
+
+                // Should have fills for all 4 orders
+                assert_eq!(success.final_fills.len(), 4);
+
+                // Verify quantities
+                let wood_bid_fill = success
+                    .final_fills
+                    .iter()
+                    .find(|f| f.order_id == OrderId(1))
+                    .unwrap();
+                assert_eq!(wood_bid_fill.filled_quantity, 10);
+
+                let food_bid_fill = success
+                    .final_fills
+                    .iter()
+                    .find(|f| f.order_id == OrderId(3))
+                    .unwrap();
+                assert_eq!(food_bid_fill.filled_quantity, 5);
+            }
+            Err(e) => panic!(
+                "Multi-resource auction should have succeeded, failed with {:?}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn test_resource_isolation() {
+        // Test that orders for different resources don't interfere
+        let orders = vec![
+            // High wood bid
+            create_order(1, ALICE, "wood", OrderType::Bid, 5, dec!(50.0), 1),
+            // Low food ask - should not match with wood bid
+            create_order(2, BOB, "food", OrderType::Ask, 5, dec!(10.0), 2),
+        ];
+        let participants = create_participants(vec![(ALICE, dec!(500.0)), (BOB, dec!(500.0))]);
+        let result = run_auction(orders, participants, 5, HashMap::new());
+
+        match result {
+            Ok(success) => {
+                // Should have no fills since resources don't match
+                assert_eq!(success.final_fills.len(), 0);
+                assert_eq!(success.clearing_prices.len(), 0);
+
+                // Balances should be unchanged
+                let balance_alice = success
+                    .final_balances
+                    .iter()
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
+                    .unwrap();
+                let balance_bob = success
+                    .final_balances
+                    .iter()
+                    .find(|b| b.participant_id == ParticipantId(BOB))
+                    .unwrap();
+                assert_eq!(balance_alice.final_currency, dec!(500.0));
+                assert_eq!(balance_bob.final_currency, dec!(500.0));
+            }
+            Err(e) => panic!(
+                "Resource isolation test should have succeeded, failed with {:?}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn test_multi_resource_budget_constraint() {
+        // Test budget constraints across multiple resources
+        let orders = vec![
+            // Alice wants to buy both wood and food
+            create_order(1, ALICE, "wood", OrderType::Bid, 10, dec!(20.0), 1),
+            create_order(2, ALICE, "food", OrderType::Bid, 10, dec!(30.0), 2),
+            // Sellers
+            create_order(3, BOB, "wood", OrderType::Ask, 10, dec!(20.0), 3),
+            create_order(4, CAROL, "food", OrderType::Ask, 10, dec!(30.0), 4),
+        ];
+        // Alice only has 400, needs 500 for both orders
+        let participants = create_participants(vec![
+            (ALICE, dec!(400.0)),
+            (BOB, dec!(1000.0)),
+            (CAROL, dec!(1000.0)),
+        ]);
+        let result = run_auction(orders, participants, 10, HashMap::new());
+
+        match result {
+            Ok(success) => {
+                // Alice should have had orders pruned
+                let alice_fills: Vec<_> = success
+                    .final_fills
+                    .iter()
+                    .filter(|f| f.participant_id == ParticipantId(ALICE))
+                    .collect();
+
+                let total_cost: Decimal = alice_fills
+                    .iter()
+                    .map(|f| Decimal::from(f.filled_quantity) * f.price)
+                    .sum();
+
+                // Total cost should not exceed Alice's budget
+                assert!(total_cost <= dec!(400.0));
+
+                let balance_alice = success
+                    .final_balances
+                    .iter()
+                    .find(|b| b.participant_id == ParticipantId(ALICE))
+                    .unwrap();
+                assert!(balance_alice.final_currency >= dec!(0.0));
+            }
+            Err(e) => panic!("Multi-resource budget constraint test failed: {:?}", e),
+        }
+    }
 } // end tests mod

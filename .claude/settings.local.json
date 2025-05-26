@@ -14,7 +14,10 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",
       "Bash(chmod:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo fix:*)",
+      "Bash(RUST_BACKTRACE=1 cargo test test_multi_resource_clearing -p village-model --lib -- --nocapture)"
     ],
     "deny": []
   }

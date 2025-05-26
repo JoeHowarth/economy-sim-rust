@@ -7,11 +7,14 @@ use auction::{
 use rust_decimal::Decimal;
 
 pub mod auction;
+pub mod core;
 pub mod events;
 pub mod fp;
 pub mod metrics;
 pub mod old_auction;
 pub mod scenario;
+pub mod strategies;
+pub mod ui;
 
 #[cfg(test)]
 mod events_test;
