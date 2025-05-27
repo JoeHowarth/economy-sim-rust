@@ -19,7 +19,11 @@
       "Bash(cargo fix:*)",
       "Bash(RUST_BACKTRACE=1 cargo test test_multi_resource_clearing -p village-model --lib -- --nocapture)",
       "Bash(rm:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Bash(python3:*)",
+      "Bash(jq:*)",
+      "Bash(./target/release/village-model-sim --help)",
+      "Bash(./target/release/village-model-sim:*)"
     ],
     "deny": []
   }

@@ -1,0 +1,51 @@
+{
+  "name": "resource_scarcity",
+  "description": "Villages struggling with limited resources and production capacity",
+  "parameters": {
+    "days_to_simulate": 150,
+    "days_without_food_before_starvation": 10,
+    "days_without_shelter_before_death": 30,
+    "days_before_growth_chance": 80,
+    "growth_chance_per_day": 0.03,
+    "house_construction_days": 60,
+    "house_construction_wood": "10",
+    "house_capacity": 5,
+    "house_decay_rate": "1",
+    "base_food_production": "1",
+    "base_wood_production": "1",
+    "second_slot_productivity": 0.5
+  },
+  "villages": [
+    {
+      "id": "desert_village",
+      "initial_workers": 8,
+      "initial_houses": 2,
+      "initial_food": "40",
+      "initial_wood": "20",
+      "initial_money": "50",
+      "food_slots": [5, 3],
+      "wood_slots": [3, 2],
+      "strategy": {
+        "type": "Survival",
+        "min_food_days": 15,
+        "min_shelter_buffer": 1
+      }
+    },
+    {
+      "id": "mountain_village",
+      "initial_workers": 8,
+      "initial_houses": 2,
+      "initial_food": "20",
+      "initial_wood": "40",
+      "initial_money": "50",
+      "food_slots": [3, 2],
+      "wood_slots": [5, 3],
+      "strategy": {
+        "type": "Survival",
+        "min_food_days": 15,
+        "min_shelter_buffer": 1
+      }
+    }
+  ],
+  "random_seed": null
+}

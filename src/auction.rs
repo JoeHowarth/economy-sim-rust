@@ -1,9 +1,9 @@
 //! # Double Auction Module
 //!
 //! This module implements a multi-resource double auction mechanism with budget constraint enforcement.
-//! 
+//!
 //! ## Overview
-//! 
+//!
 //! The auction operates as an iterative process that finds market-clearing prices where supply meets demand
 //! while ensuring no participant spends more than their available currency. This is critical for trading
 //! systems where participants have limited budgets.
@@ -168,7 +168,7 @@ impl Error for AuctionError {}
 /// Groups orders by resource ID, filtering out orders with zero effective quantity.
 fn group_orders_by_resource(orders: &[Order]) -> HashMap<ResourceId, Vec<&Order>> {
     let mut resource_orders: HashMap<ResourceId, Vec<&Order>> = HashMap::new();
-    
+
     for order in orders.iter() {
         if order.effective_quantity > 0 {
             resource_orders
@@ -177,7 +177,7 @@ fn group_orders_by_resource(orders: &[Order]) -> HashMap<ResourceId, Vec<&Order>
                 .push(order);
         }
     }
-    
+
     resource_orders
 }
 
@@ -237,7 +237,7 @@ fn calculate_net_outflows(
             }
         }
     }
-    
+
     Ok(NetOutflowResults {
         gross_outflows: costs,
         net_outflows,
@@ -281,28 +281,31 @@ fn apply_budget_pruning(
         if let Some(buy_fills) = tentative_buy_fills_info.get(participant_id) {
             for (order_id, _filled_qty, _price) in buy_fills {
                 // Find the mutable order in current_orders vec AND the map
-                if let Some(order_to_prune) =
-                    current_orders.iter_mut().find(|o| o.id == *order_id)
+                if let Some(order_to_prune) = current_orders.iter_mut().find(|o| o.id == *order_id)
                 {
                     let original_effective = order_to_prune.effective_quantity;
                     if original_effective == 0 {
                         continue;
                     } // Already fully pruned
 
-                    let original_effective_dec = Decimal::from_u64(original_effective)
-                        .ok_or_else(|| {
+                    let original_effective_dec =
+                        Decimal::from_u64(original_effective).ok_or_else(|| {
                             AuctionError::InternalError(format!(
                                 "Failed to convert effective qty {} to Decimal for order {:?}",
                                 original_effective, order_id
                             ))
                         })?;
 
-                    let new_effective_qty_dec =
-                        (original_effective_dec * reduction_factor).floor();
+                    let new_effective_qty_dec = (original_effective_dec * reduction_factor).floor();
 
                     // Convert back to u64, handling potential errors (e.g., negative result, though unlikely)
-                    let new_effective_qty_u64 = new_effective_qty_dec.to_u64()
-                         .ok_or_else(|| AuctionError::InternalError(format!("Failed to convert pruned Decimal {} back to u64 for order {:?}", new_effective_qty_dec, order_id)))?;
+                    let new_effective_qty_u64 =
+                        new_effective_qty_dec.to_u64().ok_or_else(|| {
+                            AuctionError::InternalError(format!(
+                                "Failed to convert pruned Decimal {} back to u64 for order {:?}",
+                                new_effective_qty_dec, order_id
+                            ))
+                        })?;
 
                     // Apply the prune
                     order_to_prune.effective_quantity = new_effective_qty_u64;
@@ -327,7 +330,7 @@ fn apply_budget_pruning(
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -625,7 +628,7 @@ fn create_tentative_fills(
     order_map: &HashMap<OrderId, Order>,
 ) -> Result<Vec<TentativeFill>, String> {
     let mut tentative_fills = Vec::new();
-    
+
     // Filter to eligible orders
     let eligible_bids: Vec<&Order> = sorted_bids
         .into_iter()
@@ -730,20 +733,15 @@ pub fn find_clearing_for_resource(
 
     // Find the best clearing price and volume
     let clearing_result = find_best_clearing(&sorted_bids, &asks, last_price)?;
-    
+
     let (clearing_price, matched_volume) = match clearing_result {
         Some((price, volume)) => (price, volume),
         None => return Ok(None), // No trade possible
     };
 
     // Create tentative fills based on price-time priority
-    let tentative_fills = create_tentative_fills(
-        sorted_bids,
-        asks,
-        clearing_price,
-        matched_volume,
-        order_map,
-    )?;
+    let tentative_fills =
+        create_tentative_fills(sorted_bids, asks, clearing_price, matched_volume, order_map)?;
 
     Ok(Some(ResourceClearing {
         clearing_price,

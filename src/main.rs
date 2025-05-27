@@ -40,8 +40,10 @@ use rust_decimal_macros::dec;
 use std::collections::HashMap;
 use std::process;
 use village_model::{
+    analysis::{analyze_simulation, compare_simulations, explain_simulation},
     auction::{FinalFill, run_auction},
     auction_builder::AuctionBuilder,
+    cli::{parse_args, apply_overrides, validate_scenario, Command},
     core::{Allocation, House, Village, Worker},
     events::{ConsumptionPurpose, DeathCause, EventLogger, EventType, TradeSide},
     metrics::MetricsCalculator,
@@ -66,6 +68,7 @@ fn create_village(
             days_without_food: 0,
             days_without_shelter: 0,
             days_with_both: 0,
+            spawn_eligible: false,
         })
         .collect();
 
@@ -89,6 +92,7 @@ fn create_village(
         construction_progress: dec!(0.0),
         next_worker_id: workers,
         next_house_id: houses,
+        rng: None,
     }
 }
 
@@ -99,6 +103,7 @@ fn village_from_config(id: usize, config: &VillageConfig) -> Village {
             days_without_food: 0,
             days_without_shelter: 0,
             days_with_both: 0,
+            spawn_eligible: false,
         })
         .collect();
 
@@ -122,11 +127,12 @@ fn village_from_config(id: usize, config: &VillageConfig) -> Village {
         construction_progress: dec!(0.0),
         next_worker_id: config.initial_workers,
         next_house_id: config.initial_houses,
+        rng: None,
     }
 }
 
 /// Updates a village for one tick of the simulation.
-/// 
+///
 /// This is the core update function that processes all village activities:
 /// 1. Validates worker allocation matches available worker-days
 /// 2. Processes resource production based on allocation
@@ -199,12 +205,12 @@ fn log_worker_allocation(
 }
 
 /// Processes resource production based on worker allocation and production slots.
-/// 
+///
 /// Production uses diminishing returns:
 /// - First slot workers produce at 100% efficiency
 /// - Second slot workers produce at 50% efficiency  
 /// - Additional workers produce nothing (0% efficiency)
-/// 
+///
 /// Wood production: 0.1 units per worker-day
 /// Food production: 2.0 units per worker-day
 fn process_production(
@@ -250,7 +256,7 @@ fn process_production(
 }
 
 /// Processes house construction progress.
-/// 
+///
 /// Construction mechanics:
 /// - Each worker-day adds 1 progress point
 /// - Houses complete at 60 progress points
@@ -301,7 +307,6 @@ fn process_construction(
 
             village.houses.push(new_house);
             village.construction_progress -= dec!(60.0);
-            println!("New house built! Total houses: {}", village.houses.len());
         } else {
             // Not enough wood, stop construction
             break;
@@ -310,16 +315,16 @@ fn process_construction(
 }
 
 /// Processes worker lifecycle: feeding, shelter, births, and deaths.
-/// 
+///
 /// Worker needs and consequences:
 /// - Food: 1 unit/day, starve after 10 days without
 /// - Shelter: 1 capacity/worker, die from exposure after 30 days without
-/// 
+///
 /// Reproduction:
 /// - Requires 100+ consecutive days with both food and shelter
 /// - 5% daily chance to spawn new worker when conditions met
 /// - Resets counter on successful birth
-/// 
+///
 /// Returns (new_workers_count, workers_to_remove).
 fn process_worker_lifecycle(
     village: &mut Village,
@@ -363,22 +368,15 @@ fn process_worker_lifecycle(
             0
         };
 
-        // Check for new worker spawning (5% chance after 100 days with both)
+        // Mark workers eligible for spawning
         if worker.days_with_both >= 100 {
-            println!("worker.days_with_both >= 100");
-            if rand::random_bool(0.05) {
-                println!("new worker");
-                worker.days_with_both = 0;
-                new_workers += 1;
-            }
+            worker.spawn_eligible = true;
         }
 
         // Check for death conditions
         if worker.days_without_food >= 10 {
-            println!("worker.days_without_food > 10");
             workers_to_remove.push((i, worker.id, DeathCause::Starvation));
         } else if worker.days_without_shelter >= 30 {
-            println!("worker.days_without_shelter > 30");
             workers_to_remove.push((i, worker.id, DeathCause::NoShelter));
         }
     }
@@ -394,6 +392,21 @@ fn process_worker_lifecycle(
                 purpose: ConsumptionPurpose::WorkerFeeding,
             },
         );
+    }
+    
+    // Collect eligible workers
+    let eligible_count = village.workers.iter().filter(|w| w.spawn_eligible).count();
+    
+    // Handle spawning for eligible workers
+    for _ in 0..eligible_count {
+        if village.should_spawn_worker() {
+            // Find the first eligible worker and reset their counter
+            if let Some(worker) = village.workers.iter_mut().find(|w| w.spawn_eligible) {
+                worker.days_with_both = 0;
+                worker.spawn_eligible = false;
+                new_workers += 1;
+            }
+        }
     }
 
     (new_workers, workers_to_remove)
@@ -432,6 +445,7 @@ fn apply_worker_changes(
             days_without_food: 0,
             days_without_shelter: 0,
             days_with_both: 0,
+            spawn_eligible: false,
         };
         village.next_worker_id += 1;
 
@@ -449,18 +463,14 @@ fn apply_worker_changes(
 }
 
 /// Processes house maintenance and decay.
-/// 
+///
 /// Maintenance mechanics:
 /// - Each house requires 0.1 wood/tick for basic upkeep
 /// - Houses below 0 maintenance level can be repaired with additional 0.1 wood
 /// - Without maintenance, houses decay by 0.1 level/tick
 /// - Shelter capacity = 5 * (1 + maintenance_level) when level >= 0
 /// - Negative maintenance reduces effective shelter capacity
-fn process_house_maintenance(
-    village: &mut Village,
-    logger: &mut EventLogger,
-    tick: usize,
-) {
+fn process_house_maintenance(village: &mut Village, logger: &mut EventLogger, tick: usize) {
     let mut wood_for_maintenance = dec!(0);
 
     for house in village.houses.iter_mut() {
@@ -504,12 +514,12 @@ fn process_house_maintenance(
 }
 
 /// Calculates resource production based on slot allocation and worker assignment.
-/// 
+///
 /// Implements diminishing returns:
 /// - Full slots (first N): 100% of units_per_slot per worker
 /// - Partial slots (next M): 50% of units_per_slot per worker
 /// - Beyond slots: 0% productivity
-/// 
+///
 /// # Arguments
 /// * `slots` - (full_slots, partial_slots) tuple defining productivity tiers
 /// * `units_per_slot` - Base production per worker-day at full productivity
@@ -523,11 +533,11 @@ fn produced(slots: (u32, u32), units_per_slot: Decimal, worker_days: Decimal) ->
 }
 
 /// Applies auction results to village inventories.
-/// 
+///
 /// Processes each filled order:
 /// - Bids (buys): Decrease money, increase resource
 /// - Asks (sells): Increase money, decrease resource
-/// 
+///
 /// All trades are logged for analysis and metrics.
 fn apply_trades(
     villages: &mut [Village],
@@ -603,7 +613,7 @@ fn apply_trades(
 }
 
 /// Adapter to bridge between the strategies module and village decisions.
-/// 
+///
 /// Converts between internal Village representation and the strategy API's
 /// VillageState/MarketState abstractions. This allows strategies to be
 /// implemented without knowledge of internal simulation details.
@@ -702,138 +712,119 @@ impl StrategyAdapter {
 }
 
 /// Entry point for the village model simulation.
-/// 
-/// # CLI Usage
-/// 
-/// Run simulation:
-/// ```bash
-/// village-model-sim [run] [OPTIONS]
-/// ```
-/// 
-/// View results in TUI:
-/// ```bash
-/// village-model-sim ui [event_file]
-/// ```
-/// 
-/// # Options
-/// 
-/// - `-s, --strategy <NAME>`: Assign strategy to villages (can be repeated)
-/// - `--scenario <NAME>`: Use built-in scenario (default: basic)
-/// - `--scenario-file <FILE>`: Load scenario from JSON file
-/// - `-h, --help`: Show help information
-/// 
-/// # Examples
-/// 
-/// ```bash
-/// # Run with mixed strategies
-/// village-model-sim run -s survival -s growth -s trading
-/// 
-/// # Run competitive scenario
-/// village-model-sim run --scenario competitive
-/// 
-/// # View simulation results
-/// village-model-sim ui
-/// ```
 fn main() {
-    // Parse command line arguments
-    use lexopt::prelude::*;
-
-    let mut args = lexopt::Parser::from_env();
-    let mut subcommand = None;
-    let mut event_file = None;
-    let mut strategy_names: Vec<String> = Vec::new();
-    let mut scenario_name = "basic".to_string();
-    let mut scenario_file = None;
-
-    while let Some(arg) = args.next().unwrap() {
-        match arg {
-            Value(val) => {
-                if subcommand.is_none() {
-                    subcommand = Some(val.string().unwrap());
-                } else if subcommand.as_deref() == Some("ui") && event_file.is_none() {
-                    event_file = Some(val.string().unwrap());
-                }
-            }
-            Long("strategy") | Short('s') => {
-                if let Some(Value(val)) = args.next().unwrap() {
-                    strategy_names.push(val.string().unwrap());
-                }
-            }
-            Long("scenario") => {
-                if let Some(Value(val)) = args.next().unwrap() {
-                    scenario_name = val.string().unwrap();
-                }
-            }
-            Long("scenario-file") => {
-                if let Some(Value(val)) = args.next().unwrap() {
-                    scenario_file = Some(val.string().unwrap());
-                }
-            }
-            Long("help") | Short('h') => {
-                print_help();
-                return;
-            }
-            _ => {}
+    // Parse enhanced command line arguments
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("Error parsing arguments: {}", e);
+            process::exit(1);
         }
+    };
+
+    // Set up logging if debug mode is enabled
+    if args.debug {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+            .init();
+    } else if args.verbose {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .init();
     }
 
-    match subcommand.as_deref() {
-        Some("ui") => {
-            // Run UI mode
-            let file = event_file.unwrap_or_else(|| "simulation_events.json".to_string());
-            if let Err(e) = run_ui(&file) {
+    // Execute command
+    match args.command {
+        Command::Run => {
+            run_simulation(args);
+        }
+        Command::Ui { file } => {
+            if let Err(e) = run_ui(&file.to_string_lossy()) {
                 eprintln!("Error running UI: {}", e);
                 process::exit(1);
             }
         }
-        Some("run") | None => {
-            // Run simulation (default command)
-            run_simulation(strategy_names, scenario_name, scenario_file);
+        Command::Analyze { file } => {
+            match analyze_simulation(&file) {
+                Ok(analysis) => {
+                    println!("\n=== Simulation Analysis ===");
+                    println!("Total Events: {}", analysis.total_events);
+                    println!("Duration: {} days", analysis.total_days);
+                    println!("\nVillage Performance:");
+                    for village in &analysis.villages {
+                        println!("  {}: {} -> {} workers ({:+.1}% growth)",
+                            village.id,
+                            village.initial_population,
+                            village.final_population,
+                            village.growth_rate * 100.0
+                        );
+                    }
+                    println!("\nMarket Activity:");
+                    println!("  Orders: {}", analysis.market.total_orders);
+                    println!("  Trades: {} ({:.1}% success rate)",
+                        analysis.market.total_trades,
+                        analysis.market.trade_success_rate * 100.0
+                    );
+                    if !analysis.insights.is_empty() {
+                        println!("\nInsights:");
+                        for insight in &analysis.insights {
+                            println!("  - {}", insight);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error analyzing simulation: {}", e);
+                    process::exit(1);
+                }
+            }
         }
-        Some(cmd) => {
-            eprintln!("Unknown command: {}", cmd);
-            print_help();
-            process::exit(1);
+        Command::Compare { files } => {
+            let mut analyses = Vec::new();
+            for file in &files {
+                match analyze_simulation(file) {
+                    Ok(analysis) => analyses.push(analysis),
+                    Err(e) => {
+                        eprintln!("Error analyzing {}: {}", file.display(), e);
+                        process::exit(1);
+                    }
+                }
+            }
+            
+            let report = compare_simulations(&analyses);
+            println!("\n=== Simulation Comparison ===");
+            for (i, summary) in report.simulation_summaries.iter().enumerate() {
+                println!("\nSimulation {} ({}):", i + 1, files[i].display());
+                println!("  Avg Growth Rate: {:+.1}%", summary.avg_growth_rate * 100.0);
+                println!("  Avg Survival Rate: {:.1}%", summary.avg_survival_rate * 100.0);
+                println!("  Total Trades: {}", summary.total_trades);
+                println!("  Trade Success Rate: {:.1}%", summary.trade_success_rate * 100.0);
+            }
+            
+            if !report.strategy_rankings.is_empty() {
+                println!("\nStrategy Rankings:");
+                for (rank, (strategy, score)) in report.strategy_rankings.iter().enumerate() {
+                    println!("  {}. {} (score: {:.2})", rank + 1, strategy, score);
+                }
+            }
+        }
+        Command::Explain { file } => {
+            match analyze_simulation(&file) {
+                Ok(analysis) => {
+                    let explanation = explain_simulation(&analysis);
+                    println!("{}", explanation);
+                }
+                Err(e) => {
+                    eprintln!("Error analyzing simulation: {}", e);
+                    process::exit(1);
+                }
+            }
         }
     }
 }
 
-fn print_help() {
-    println!("\nVillage Model Simulation\n");
-    println!("USAGE:");
-    println!("    village-model-sim [COMMAND] [OPTIONS]\n");
-    println!("COMMANDS:");
-    println!("    run              Run the simulation (default)");
-    println!("    ui [FILE]        View simulation events in TUI");
-    println!("                     (default: simulation_events.json)\n");
-    println!("OPTIONS:");
-    println!("    -s, --strategy <NAME>    Strategy for villages (can be used multiple times)");
-    println!("                            Available: default, survival, growth, trading,");
-    println!("                            balanced, greedy");
-    println!("    --scenario <NAME>        Use a built-in scenario (default: basic)");
-    println!("    --scenario-file <FILE>   Load scenario from JSON file");
-    println!("    -h, --help              Print help information\n");
-    println!("UI CONTROLS:");
-    println!("    Space            Pause/Resume playback");
-    println!("    ←/→              Step backward/forward through events");
-    println!("    Home/End         Jump to beginning/end");
-    println!("    +/-              Faster/slower playback (adjust seconds per tick)");
-    println!("    Q                Quit\n");
-    println!("EXAMPLES:");
-    println!("    # Run simulation with default strategies");
-    println!("    village-model-sim run\n");
-    println!("    # Run with specific strategies for villages");
-    println!("    village-model-sim run -s survival -s growth -s trading_wood\n");
-    println!("    # Run with a specific scenario");
-    println!("    village-model-sim run --scenario competitive\n");
-    println!("    # View the simulation in TUI");
-    println!("    village-model-sim ui");
-}
 
 /// Runs the main simulation loop.
-/// 
+///
 /// # Simulation Flow
-/// 
+///
 /// 1. **Initialization**: Load scenario, create villages, assign strategies
 /// 2. **Main Loop**: For each tick:
 ///    - Villages decide allocations and trading orders via strategies
@@ -842,40 +833,31 @@ fn print_help() {
 ///    - Apply trade results to village inventories
 /// 3. **Termination**: After N ticks or when all villages die
 /// 4. **Output**: Save events to JSON, calculate and display metrics
-/// 
-/// # Arguments
-/// 
-/// * `strategy_names` - List of strategy names to assign to villages
-/// * `scenario_name` - Name of built-in scenario to use
-/// * `scenario_file` - Optional path to custom scenario JSON file
-fn run_simulation(
-    strategy_names: Vec<String>,
-    scenario_name: String,
-    scenario_file: Option<String>,
-) {
+fn run_simulation(args: village_model::cli::CliArgs) {
+    log::info!("Starting simulation with args: {:?}", args);
     // Load scenario
-    let scenario = if let Some(file) = scenario_file {
+    let mut scenario = if let Some(ref file) = args.scenario_file {
         // Load from file
         match std::fs::read_to_string(&file) {
             Ok(contents) => {
                 match serde_json::from_str::<village_model::scenario::Scenario>(&contents) {
                     Ok(scenario) => scenario,
                     Err(e) => {
-                        eprintln!("Error parsing scenario file {}: {}", file, e);
+                        eprintln!("Error parsing scenario file {}: {}", file.display(), e);
                         process::exit(1);
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Error reading scenario file {}: {}", file, e);
+                eprintln!("Error reading scenario file {}: {}", file.display(), e);
                 process::exit(1);
             }
         }
     } else {
         // Use built-in scenario
         let scenarios = create_standard_scenarios();
-        scenarios.get(&scenario_name).cloned().unwrap_or_else(|| {
-            eprintln!("Unknown scenario: {}", scenario_name);
+        scenarios.get(&args.scenario_name).cloned().unwrap_or_else(|| {
+            eprintln!("Unknown scenario: {}", args.scenario_name);
             eprintln!(
                 "Available scenarios: {:?}",
                 scenarios.keys().collect::<Vec<_>>()
@@ -883,6 +865,12 @@ fn run_simulation(
             process::exit(1);
         })
     };
+
+    // Apply CLI overrides to scenario
+    apply_overrides(&mut scenario, &args);
+    
+    // Validate scenario configuration
+    validate_scenario(&scenario, &args);
 
     println!("{}", scenario);
 
@@ -893,6 +881,20 @@ fn run_simulation(
         .enumerate()
         .map(|(i, config)| village_from_config(i, config))
         .collect();
+    
+    // Initialize random number generator if seed provided
+    if let Some(seed) = scenario.random_seed {
+        log::info!("Using random seed: {}", seed);
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        
+        // Set up RNG for each village with deterministic seeds
+        for (i, village) in villages.iter_mut().enumerate() {
+            // Create a unique seed for each village based on the base seed
+            let village_seed = seed.wrapping_add(i as u64);
+            village.rng = Some(StdRng::seed_from_u64(village_seed));
+        }
+    }
 
     // Create village ID mapping
     let village_ids: HashMap<String, VillageId> = villages
@@ -910,35 +912,14 @@ fn run_simulation(
     println!("\nVillages with strategies:");
 
     // Create strategies for each village
-    let strategies: Vec<StrategyAdapter> = if strategy_names.is_empty() {
+    let strategies: Vec<StrategyAdapter> = if args.strategies.is_empty() {
         // Use strategies from scenario configuration
         villages
             .iter()
             .enumerate()
             .map(|(i, v)| {
-                let village_state = strategies::VillageState {
-                    id: v.id_str.clone(),
-                    workers: v.workers.len(),
-                    wood: v.wood,
-                    food: v.food,
-                    money: v.money,
-                    houses: v.houses.len(),
-                    house_capacity: v.houses.len() * 5,
-                    wood_slots: v.wood_slots,
-                    food_slots: v.food_slots,
-                    worker_days: v.worker_days(),
-                    days_without_food: v.workers.iter().map(|w| w.days_without_food).collect(),
-                    days_without_shelter: v
-                        .workers
-                        .iter()
-                        .map(|w| w.days_without_shelter)
-                        .collect(),
-                    construction_progress: v.construction_progress,
-                };
-                let strategy =
-                    strategies::create_strategy(&scenario.villages[i].strategy, &village_state);
-                let strategy_name = strategy.name();
-                println!("  {}: {} (from scenario)", v.id_str, strategy_name);
+                let strategy = strategies::create_strategy(&scenario.villages[i].strategy);
+                println!("  {}: {} (from scenario)", v.id_str, strategy.name());
                 StrategyAdapter::new(strategy)
             })
             .collect()
@@ -948,29 +929,9 @@ fn run_simulation(
             .iter()
             .enumerate()
             .map(|(i, v)| {
-                let strategy_name = &strategy_names[i % strategy_names.len()];
+                let strategy_name = &args.strategies[i % args.strategies.len()];
                 println!("  {}: {}", v.id_str, strategy_name);
-
-                let village_state = strategies::VillageState {
-                    id: v.id_str.clone(),
-                    workers: v.workers.len(),
-                    wood: v.wood,
-                    food: v.food,
-                    money: v.money,
-                    houses: v.houses.len(),
-                    house_capacity: v.houses.len() * 5,
-                    wood_slots: v.wood_slots,
-                    food_slots: v.food_slots,
-                    worker_days: v.worker_days(),
-                    days_without_food: v.workers.iter().map(|w| w.days_without_food).collect(),
-                    days_without_shelter: v
-                        .workers
-                        .iter()
-                        .map(|w| w.days_without_shelter)
-                        .collect(),
-                    construction_progress: v.construction_progress,
-                };
-                let strategy = strategies::create_strategy_by_name(strategy_name, &village_state);
+                let strategy = strategies::create_strategy_by_name(strategy_name);
                 StrategyAdapter::new(strategy)
             })
             .collect()
@@ -994,10 +955,6 @@ fn run_simulation(
             last_food_price: last_clearing_prices
                 .get(&village_model::auction::ResourceId("food".to_string()))
                 .cloned(),
-            wood_bids: vec![], // TODO: Could populate from previous tick
-            wood_asks: vec![],
-            food_bids: vec![],
-            food_asks: vec![],
         };
 
         // Strategy phase: Each village decides worker allocation and trading orders
@@ -1073,8 +1030,11 @@ fn run_simulation(
     }
 
     // Save events
-    let filename = "simulation_events.json";
-    logger.save_to_file(filename).unwrap();
+    let filename = args.output_file
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "simulation_events.json".to_string());
+    logger.save_to_file(&filename).unwrap();
     println!("\nEvents saved to {}", filename);
 
     // Calculate and display metrics

@@ -1,0 +1,55 @@
+{
+  "name": "balanced_start",
+  "description": "Two villages with balanced initial resources, ideal for testing different strategies",
+  "parameters": {
+    "days_to_simulate": 200,
+    "days_without_food_before_starvation": 10,
+    "days_without_shelter_before_death": 30,
+    "days_before_growth_chance": 50,
+    "growth_chance_per_day": 0.05,
+    "house_construction_days": 60,
+    "house_construction_wood": "10",
+    "house_capacity": 5,
+    "house_decay_rate": "1",
+    "base_food_production": "1",
+    "base_wood_production": "1",
+    "second_slot_productivity": 0.75
+  },
+  "villages": [
+    {
+      "id": "village_north",
+      "initial_workers": 10,
+      "initial_houses": 3,
+      "initial_food": "150",
+      "initial_wood": "150",
+      "initial_money": "200",
+      "food_slots": [15, 10],
+      "wood_slots": [15, 10],
+      "strategy": {
+        "type": "Balanced",
+        "food_weight": 0.25,
+        "wood_weight": 0.25,
+        "construction_weight": 0.25,
+        "repair_weight": 0.25
+      }
+    },
+    {
+      "id": "village_south",
+      "initial_workers": 10,
+      "initial_houses": 3,
+      "initial_food": "150",
+      "initial_wood": "150",
+      "initial_money": "200",
+      "food_slots": [15, 10],
+      "wood_slots": [15, 10],
+      "strategy": {
+        "type": "Balanced",
+        "food_weight": 0.25,
+        "wood_weight": 0.25,
+        "construction_weight": 0.25,
+        "repair_weight": 0.25
+      }
+    }
+  ],
+  "random_seed": null
+}

@@ -1,0 +1,65 @@
+{
+  "name": "competitive_market",
+  "description": "Four villages competing in a resource-constrained market environment",
+  "parameters": {
+    "days_to_simulate": 300,
+    "days_without_food_before_starvation": 10,
+    "days_without_shelter_before_death": 30,
+    "days_before_growth_chance": 60,
+    "growth_chance_per_day": 0.05,
+    "house_construction_days": 60,
+    "house_construction_wood": "10",
+    "house_capacity": 5,
+    "house_decay_rate": "1",
+    "base_food_production": "1",
+    "base_wood_production": "1",
+    "second_slot_productivity": 0.75
+  },
+  "villages": [
+    {
+      "id": "aggressive_trader",
+      "initial_workers": 12,
+      "initial_houses": 3,
+      "initial_food": "80",
+      "initial_wood": "80",
+      "initial_money": "300",
+      "food_slots": [12, 8],
+      "wood_slots": [12, 8],
+      "strategy": "Greedy"
+    },
+    {
+      "id": "conservative_grower",
+      "initial_workers": 8,
+      "initial_houses": 2,
+      "initial_food": "120",
+      "initial_wood": "120",
+      "initial_money": "200",
+      "food_slots": [10, 10],
+      "wood_slots": [10, 10],
+      "strategy": "Growth"
+    },
+    {
+      "id": "survival_focused",
+      "initial_workers": 10,
+      "initial_houses": 2,
+      "initial_food": "100",
+      "initial_wood": "100",
+      "initial_money": "250",
+      "food_slots": [11, 9],
+      "wood_slots": [11, 9],
+      "strategy": "Survival"
+    },
+    {
+      "id": "balanced_competitor",
+      "initial_workers": 10,
+      "initial_houses": 2,
+      "initial_food": "100",
+      "initial_wood": "100",
+      "initial_money": "250",
+      "food_slots": [11, 9],
+      "wood_slots": [11, 9],
+      "strategy": "Balanced"
+    }
+  ],
+  "random_seed": 54321
+}

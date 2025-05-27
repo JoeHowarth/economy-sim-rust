@@ -1,0 +1,68 @@
+{
+  "name": "trading_specialization",
+  "description": "Villages specialized in different resources to encourage trading",
+  "parameters": {
+    "days_to_simulate": 250,
+    "days_without_food_before_starvation": 10,
+    "days_without_shelter_before_death": 30,
+    "days_before_growth_chance": 50,
+    "growth_chance_per_day": 0.05,
+    "house_construction_days": 60,
+    "house_construction_wood": "10",
+    "house_capacity": 5,
+    "house_decay_rate": "1",
+    "base_food_production": "1",
+    "base_wood_production": "1",
+    "second_slot_productivity": 0.75
+  },
+  "random_seed": 98765,
+  "villages": [
+    {
+      "id": "food_specialist",
+      "initial_workers": 15,
+      "initial_houses": 3,
+      "initial_food": "100",
+      "initial_wood": "50",
+      "initial_money": "500",
+      "food_slots": [20, 15],
+      "wood_slots": [5, 3],
+      "strategy": {
+        "type": "Trading",
+        "price_multiplier": 1.0,
+        "max_trade_fraction": 0.3
+      }
+    },
+    {
+      "id": "wood_specialist",
+      "initial_workers": 15,
+      "initial_houses": 3,
+      "initial_food": "50",
+      "initial_wood": "100",
+      "initial_money": "500",
+      "food_slots": [5, 3],
+      "wood_slots": [20, 15],
+      "strategy": {
+        "type": "Trading",
+        "price_multiplier": 1.0,
+        "max_trade_fraction": 0.3
+      }
+    },
+    {
+      "id": "balanced_trader",
+      "initial_workers": 10,
+      "initial_houses": 2,
+      "initial_food": "75",
+      "initial_wood": "75",
+      "initial_money": "400",
+      "food_slots": [10, 8],
+      "wood_slots": [10, 8],
+      "strategy": {
+        "type": "Balanced",
+        "food_weight": 0.25,
+        "wood_weight": 0.25,
+        "construction_weight": 0.25,
+        "repair_weight": 0.25
+      }
+    }
+  ]
+}

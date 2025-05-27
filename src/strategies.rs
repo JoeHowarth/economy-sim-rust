@@ -5,7 +5,7 @@
 //! management and growth, from conservative survival to aggressive trading.
 //!
 //! # Strategy Types
-//! 
+//!
 //! - **Default**: Fixed allocation (70% wood, 20% food, 10% construction), no trading
 //! - **Survival**: Prioritizes immediate needs with resource buffers
 //! - **Growth**: Focuses on population expansion through housing
@@ -62,14 +62,19 @@ fn get_default_price(is_wood: bool) -> Decimal {
 }
 
 /// Check if village can afford a quantity at a given price
-fn can_afford_quantity(money: Decimal, price: Decimal, quantity: u32, reserve_fraction: Decimal) -> bool {
+fn can_afford_quantity(
+    money: Decimal,
+    price: Decimal,
+    quantity: u32,
+    reserve_fraction: Decimal,
+) -> bool {
     let total_cost = price * Decimal::from(quantity);
     let available_money = money * (dec!(1) - reserve_fraction);
     total_cost <= available_money
 }
 
 /// Trait for village decision-making strategies.
-/// 
+///
 /// Implementations analyze village and market state to produce:
 /// - Worker allocation across food, wood, and construction
 /// - Trading orders (bids and asks) for the market
@@ -86,7 +91,7 @@ pub trait Strategy: Send + Sync {
 }
 
 /// Current state of a village for strategy decisions.
-/// 
+///
 /// Contains all information strategies need to make informed decisions
 /// about resource allocation and trading.
 #[derive(Debug, Clone)]
@@ -107,21 +112,17 @@ pub struct VillageState {
 }
 
 /// Market information for trading decisions.
-/// 
+///
 /// Provides price history and current order book state
 /// for both wood and food markets.
 #[derive(Debug, Clone)]
 pub struct MarketState {
     pub last_wood_price: Option<Decimal>,
     pub last_food_price: Option<Decimal>,
-    pub wood_bids: Vec<(Decimal, u32)>, // (price, quantity)
-    pub wood_asks: Vec<(Decimal, u32)>,
-    pub food_bids: Vec<(Decimal, u32)>,
-    pub food_asks: Vec<(Decimal, u32)>,
 }
 
 /// Strategy output containing allocation and trading decisions.
-/// 
+///
 /// All trading orders are optional - strategies only generate
 /// orders when they want to participate in the market.
 #[derive(Debug, Clone)]
@@ -134,7 +135,7 @@ pub struct StrategyDecision {
 }
 
 /// Worker allocation decision.
-/// 
+///
 /// Values represent worker-days to allocate to each task.
 /// Should sum to approximately village.worker_days.
 #[derive(Debug, Clone)]
@@ -146,15 +147,15 @@ pub struct WorkerAllocation {
 
 // === SURVIVAL STRATEGY ===
 /// Prioritizes immediate survival needs with conservative resource management.
-/// 
+///
 /// # Philosophy
 /// Maintains buffer stocks of resources before pursuing growth. Conservative
 /// trading - only buys when critically low, sells when buffers exceed 2x target.
-/// 
+///
 /// # Performance
 /// - **Excels**: Resource-scarce environments, early game, volatile markets
 /// - **Struggles**: Late game growth, high-competition trading scenarios
-/// 
+///
 /// # Parameters
 /// - `min_food_days`: Target food buffer (default: 20 days)
 /// - `min_wood_days`: Target wood buffer (default: 10 days)
@@ -164,17 +165,20 @@ pub struct SurvivalStrategy {
 }
 
 impl SurvivalStrategy {
-    pub fn new() -> Self {
+    pub fn new(min_food_days: u32, min_shelter_buffer: u32) -> Self {
         Self {
-            min_food_days: 20,
-            min_wood_days: 10,
+            min_food_days,
+            min_wood_days: min_shelter_buffer,
         }
     }
 }
 
 impl Default for SurvivalStrategy {
     fn default() -> Self {
-        Self::new()
+        Self {
+            min_food_days: 20,
+            min_wood_days: 10,
+        }
     }
 }
 
@@ -299,33 +303,45 @@ impl Strategy for SurvivalStrategy {
 
 // === GROWTH STRATEGY ===
 /// Focuses on population expansion through balanced resource production.
-/// 
+///
 /// # Philosophy
 /// Maintains optimal worker-to-house ratio for population growth. Trades
 /// to acquire resources needed for expansion. Prioritizes long-term growth
 /// over short-term efficiency.
-/// 
+///
 /// # Performance
 /// - **Excels**: Stable markets, mid-to-late game, resource-rich environments
 /// - **Struggles**: Early game survival, resource scarcity
-/// 
+///
 /// # Parameters
 /// - `target_worker_to_house_ratio`: Optimal occupancy (default: 3.5/5.0 = 70%)
 pub struct GrowthStrategy {
     target_worker_to_house_ratio: f64,
+    house_buffer: usize,
 }
 
 impl GrowthStrategy {
-    pub fn new() -> Self {
+    pub fn new(target_population: usize, house_buffer: usize) -> Self {
+        // Convert target population to worker-to-house ratio
+        // Assuming house capacity of 5, we want ratio that allows for target_population
+        let target_ratio = if target_population > 0 {
+            (target_population as f64 - house_buffer as f64) / (target_population as f64 / 5.0).max(1.0)
+        } else {
+            3.5
+        };
         Self {
-            target_worker_to_house_ratio: 3.5, // Leave room for growth
+            target_worker_to_house_ratio: target_ratio.clamp(2.0, 4.5), // Keep ratio reasonable
+            house_buffer,
         }
     }
 }
 
 impl Default for GrowthStrategy {
     fn default() -> Self {
-        Self::new()
+        Self {
+            target_worker_to_house_ratio: 3.5, // Leave room for growth
+            house_buffer: 2,
+        }
     }
 }
 
@@ -341,9 +357,10 @@ impl Strategy for GrowthStrategy {
     ) -> StrategyDecision {
         let worker_days = village.worker_days;
 
-        // Calculate if we need more houses
+        // Calculate if we need more houses, accounting for buffer
         let current_ratio = village.workers as f64 / village.house_capacity.max(1) as f64;
-        let need_houses = current_ratio > self.target_worker_to_house_ratio;
+        let available_slots = village.house_capacity.saturating_sub(village.workers);
+        let need_houses = current_ratio > self.target_worker_to_house_ratio || available_slots < self.house_buffer;
 
         // Base allocation for growth
         let mut allocation = WorkerAllocation {
@@ -368,10 +385,15 @@ impl Strategy for GrowthStrategy {
         let mut food_bid = None;
         let food_ask = None;
 
-        // Need wood for construction
+        // Need wood for construction - buy more aggressively if we're below buffer
         if need_houses && village.wood < dec!(30) && village.money > dec!(50) {
+            let urgency_multiplier = if available_slots < self.house_buffer {
+                dec!(1.3) // More urgent when below buffer
+            } else {
+                dec!(1.2)
+            };
             let quantity = 20u32;
-            let price = calculate_wood_bid_price(market.last_wood_price, dec!(1.2));
+            let price = calculate_wood_bid_price(market.last_wood_price, urgency_multiplier);
             wood_bid = Some((price, quantity));
         }
 
@@ -403,30 +425,37 @@ impl Strategy for GrowthStrategy {
 
 // === TRADING STRATEGY ===
 /// Specializes in one resource and trades aggressively for others.
-/// 
+///
 /// # Philosophy
 /// Chooses specialization based on production slot efficiency. Allocates
 /// 85% of workers to specialized resource, trades surplus for needs.
 /// Minimal construction effort.
-/// 
+///
 /// # Performance
 /// - **Excels**: Active markets, high slot differentiation, trade-friendly scenarios
 /// - **Struggles**: Isolated play, market crashes, early game
-/// 
+///
 /// # Specialization
 /// Automatically chosen based on which resource has better production slots
 pub struct TradingStrategy {
-    specialize_food: bool,
+    price_multiplier: Decimal,
+    max_trade_fraction: Decimal,
 }
 
 impl TradingStrategy {
-    pub fn new(village_state: &VillageState) -> Self {
-        // Decide specialization based on slots
-        let food_productivity = village_state.food_slots.0 + village_state.food_slots.1 / 2;
-        let wood_productivity = village_state.wood_slots.0 + village_state.wood_slots.1 / 2;
-
+    pub fn new(price_multiplier: f64, max_trade_fraction: f64) -> Self {
         Self {
-            specialize_food: food_productivity >= wood_productivity,
+            price_multiplier: Decimal::from_f64(price_multiplier).unwrap_or(dec!(1.0)),
+            max_trade_fraction: Decimal::from_f64(max_trade_fraction).unwrap_or(dec!(0.3)),
+        }
+    }
+}
+
+impl Default for TradingStrategy {
+    fn default() -> Self {
+        Self {
+            price_multiplier: dec!(1.0),
+            max_trade_fraction: dec!(0.3),
         }
     }
 }
@@ -443,8 +472,12 @@ impl Strategy for TradingStrategy {
     ) -> StrategyDecision {
         let worker_days = village.worker_days;
 
+        // Determine specialization based on production slots
+        let specialize_food = village.food_slots.0 > village.wood_slots.0 ||
+            (village.food_slots.0 == village.wood_slots.0 && village.food_slots.1 > village.wood_slots.1);
+
         // Heavy specialization
-        let allocation = if self.specialize_food {
+        let allocation = if specialize_food {
             WorkerAllocation {
                 wood: worker_days * dec!(0.1),
                 food: worker_days * dec!(0.85),
@@ -464,32 +497,32 @@ impl Strategy for TradingStrategy {
         let mut food_bid = None;
         let mut food_ask = None;
 
-        if self.specialize_food {
+        if specialize_food {
             // Sell food aggressively
             if village.food > dec!(20) {
-                let quantity = (village.food * dec!(0.3)).to_u32().unwrap_or(0).min(100);
-                let price = calculate_food_ask_price(market.last_food_price, dec!(0.95));
+                let quantity = (village.food * self.max_trade_fraction).to_u32().unwrap_or(0).min(100);
+                let price = calculate_food_ask_price(market.last_food_price, dec!(0.95) * self.price_multiplier);
                 food_ask = Some((price, quantity));
             }
 
             // Buy wood as needed
             if village.wood < dec!(20) && village.money > dec!(10) {
                 let quantity = 30u32;
-                let price = calculate_wood_bid_price(market.last_wood_price, dec!(1.05));
+                let price = calculate_wood_bid_price(market.last_wood_price, dec!(1.05) * self.price_multiplier);
                 wood_bid = Some((price, quantity));
             }
         } else {
             // Sell wood aggressively
             if village.wood > dec!(10) {
-                let quantity = (village.wood * dec!(0.3)).to_u32().unwrap_or(0).min(30);
-                let price = calculate_wood_ask_price(market.last_wood_price, dec!(0.95));
+                let quantity = (village.wood * self.max_trade_fraction).to_u32().unwrap_or(0).min(30);
+                let price = calculate_wood_ask_price(market.last_wood_price, dec!(0.95) * self.price_multiplier);
                 wood_ask = Some((price, quantity));
             }
 
             // Buy food as needed
             if village.food < dec!(30) && village.money > dec!(10) {
                 let quantity = (village.workers as u32 * 20).min(100);
-                let price = calculate_food_bid_price(market.last_food_price, dec!(1.05));
+                let price = calculate_food_bid_price(market.last_food_price, dec!(1.05) * self.price_multiplier);
                 food_bid = Some((price, quantity));
             }
         }
@@ -506,25 +539,45 @@ impl Strategy for TradingStrategy {
 
 // === BALANCED STRATEGY ===
 /// Adaptive strategy that responds dynamically to current needs.
-/// 
+///
 /// # Philosophy
 /// Uses urgency-based weighting to allocate workers. More conservative
 /// trading with 15-day target buffers. Increases construction when
 /// housing becomes limiting factor.
-/// 
+///
 /// # Performance
 /// - **Excels**: General purpose, unpredictable environments, moderate markets
 /// - **Struggles**: Highly competitive specialized markets
-/// 
+///
 /// # Adaptation
 /// - Food/wood urgency: Inverse of days of supply
 /// - Construction: 30% when over capacity, 10% otherwise
-#[derive(Default)]
-pub struct BalancedStrategy;
+pub struct BalancedStrategy {
+    food_weight: f64,
+    wood_weight: f64,
+    construction_weight: f64,
+    repair_weight: f64,
+}
 
 impl BalancedStrategy {
-    pub fn new() -> Self {
-        Self
+    pub fn new(food_weight: f64, wood_weight: f64, construction_weight: f64, repair_weight: f64) -> Self {
+        Self {
+            food_weight,
+            wood_weight,
+            construction_weight,
+            repair_weight,
+        }
+    }
+}
+
+impl Default for BalancedStrategy {
+    fn default() -> Self {
+        Self {
+            food_weight: 0.25,
+            wood_weight: 0.25,
+            construction_weight: 0.25,
+            repair_weight: 0.25,
+        }
     }
 }
 
@@ -547,14 +600,23 @@ impl Strategy for BalancedStrategy {
         let food_days = calculate_resource_days(village.food, food_per_day);
         let wood_days = calculate_resource_days(village.wood, wood_per_day);
 
-        // Dynamic weights based on needs
-        let food_urgency = calculate_resource_urgency(food_days, 10.0);
-        let wood_urgency = calculate_resource_urgency(wood_days, 20.0);
-        let construction_need = if village.workers > village.house_capacity {
-            0.3
+        // Dynamic weights based on needs and configuration
+        let food_urgency = calculate_resource_urgency(food_days, 10.0) * self.food_weight;
+        let wood_urgency = calculate_resource_urgency(wood_days, 20.0) * self.wood_weight;
+        
+        // Calculate construction need (new houses)
+        let new_house_need = if village.workers > village.house_capacity {
+            0.3 * self.construction_weight
         } else {
-            0.1
+            0.1 * self.construction_weight
         };
+        
+        // Calculate repair need based on number of houses
+        // More houses = more repair needed
+        let repair_need = (village.houses as f64 * 0.02 * self.repair_weight).min(0.2);
+        
+        // Combined construction effort for both new houses and repairs
+        let construction_need = new_house_need + repair_need;
 
         let total = food_urgency + wood_urgency + construction_need;
 
@@ -614,27 +676,21 @@ impl Strategy for BalancedStrategy {
 
 // === GREEDY STRATEGY ===
 /// Maximizes immediate production value with no long-term planning.
-/// 
+///
 /// # Philosophy
 /// Allocates all workers to highest-value resource based on market prices.
 /// No construction. Emergency trades only at premium prices. Sells all
 /// surplus aggressively.
-/// 
+///
 /// # Performance
 /// - **Excels**: Short games, price volatility exploitation, pure production
 /// - **Struggles**: Long-term sustainability, population growth, market downturns
-/// 
+///
 /// # Trade Behavior
 /// - Buys only in emergencies at 150% market price
 /// - Sells all surplus at 80% market price
 #[derive(Default)]
 pub struct GreedyStrategy;
-
-impl GreedyStrategy {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 impl Strategy for GreedyStrategy {
     fn name(&self) -> &str {
@@ -718,7 +774,7 @@ impl Strategy for GreedyStrategy {
 
 // === DEFAULT STRATEGY (legacy) ===
 /// Legacy fixed allocation strategy with no trading.
-/// 
+///
 /// Simple baseline strategy using fixed percentages:
 /// 70% wood, 20% food, 10% construction.
 pub struct DefaultStrategy;
@@ -750,29 +806,43 @@ impl Strategy for DefaultStrategy {
 }
 
 /// Create a strategy from configuration.
-/// 
+///
 /// Used by the scenario system to instantiate strategies
 /// with custom parameters.
-pub fn create_strategy(config: &StrategyConfig, village_state: &VillageState) -> Box<dyn Strategy> {
+pub fn create_strategy(config: &StrategyConfig) -> Box<dyn Strategy> {
     match config {
-        StrategyConfig::Balanced { .. } => Box::new(BalancedStrategy::new()),
-        StrategyConfig::Survival { .. } => Box::new(SurvivalStrategy::new()),
-        StrategyConfig::Growth { .. } => Box::new(GrowthStrategy::new()),
-        StrategyConfig::Trading { .. } => Box::new(TradingStrategy::new(village_state)),
+        StrategyConfig::Balanced {
+            food_weight,
+            wood_weight,
+            construction_weight,
+            repair_weight,
+        } => Box::new(BalancedStrategy::new(*food_weight, *wood_weight, *construction_weight, *repair_weight)),
+        StrategyConfig::Survival {
+            min_food_days,
+            min_shelter_buffer,
+        } => Box::new(SurvivalStrategy::new(*min_food_days as u32, *min_shelter_buffer as u32)),
+        StrategyConfig::Growth {
+            target_population,
+            house_buffer,
+        } => Box::new(GrowthStrategy::new(*target_population, *house_buffer)),
+        StrategyConfig::Trading {
+            price_multiplier,
+            max_trade_fraction,
+        } => Box::new(TradingStrategy::new(*price_multiplier, *max_trade_fraction)),
     }
 }
 
 /// Create a strategy by name.
-/// 
+///
 /// Used by CLI and testing to create strategies dynamically.
 /// Names are case-insensitive.
-pub fn create_strategy_by_name(name: &str, village_state: &VillageState) -> Box<dyn Strategy> {
+pub fn create_strategy_by_name(name: &str) -> Box<dyn Strategy> {
     match name.to_lowercase().as_str() {
-        "survival" => Box::new(SurvivalStrategy::new()),
-        "growth" => Box::new(GrowthStrategy::new()),
-        "trading" => Box::new(TradingStrategy::new(village_state)),
-        "balanced" => Box::new(BalancedStrategy::new()),
-        "greedy" => Box::new(GreedyStrategy::new()),
+        "survival" => Box::new(SurvivalStrategy::default()),
+        "growth" => Box::new(GrowthStrategy::default()),
+        "trading" => Box::new(TradingStrategy::default()),
+        "balanced" => Box::new(BalancedStrategy::default()),
+        "greedy" => Box::new(GreedyStrategy),
         _ => Box::new(DefaultStrategy),
     }
 }

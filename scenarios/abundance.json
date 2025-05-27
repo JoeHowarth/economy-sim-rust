@@ -1,0 +1,54 @@
+{
+  "name": "abundance",
+  "description": "Villages with abundant resources to test growth and expansion strategies",
+  "parameters": {
+    "days_to_simulate": 400,
+    "days_without_food_before_starvation": 10,
+    "days_without_shelter_before_death": 30,
+    "days_before_growth_chance": 30,
+    "growth_chance_per_day": 0.08,
+    "house_construction_days": 60,
+    "house_construction_wood": "10",
+    "house_capacity": 5,
+    "house_decay_rate": "1",
+    "base_food_production": "1.2",
+    "base_wood_production": "1.2",
+    "second_slot_productivity": 0.85
+  },
+  "villages": [
+    {
+      "id": "growth_maximizer",
+      "initial_workers": 20,
+      "initial_houses": 5,
+      "initial_food": "500",
+      "initial_wood": "500",
+      "initial_money": "1000",
+      "food_slots": [25, 20],
+      "wood_slots": [25, 20],
+      "strategy": "Growth"
+    },
+    {
+      "id": "trading_empire",
+      "initial_workers": 15,
+      "initial_houses": 4,
+      "initial_food": "400",
+      "initial_wood": "400",
+      "initial_money": "1500",
+      "food_slots": [30, 15],
+      "wood_slots": [20, 25],
+      "strategy": "Trading"
+    },
+    {
+      "id": "balanced_prosperity",
+      "initial_workers": 18,
+      "initial_houses": 4,
+      "initial_food": "450",
+      "initial_wood": "450",
+      "initial_money": "800",
+      "food_slots": [22, 22],
+      "wood_slots": [22, 22],
+      "strategy": "Balanced"
+    }
+  ],
+  "random_seed": 11111
+}

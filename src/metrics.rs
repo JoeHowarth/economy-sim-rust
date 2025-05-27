@@ -15,6 +15,7 @@ pub struct VillageMetrics {
     pub stability_score: f64,
     pub overall_score: f64,
 
+    pub initial_population: usize,
     pub final_population: usize,
     pub peak_population: usize,
     pub total_births: usize,
@@ -65,6 +66,7 @@ impl MetricsCalculator {
 
         let mut metrics = VillageMetrics {
             village_id: village_id.to_string(),
+            initial_population,
             survival_score: 0.0,
             growth_score: 0.0,
             economic_efficiency: 0.0,
@@ -214,11 +216,15 @@ impl MetricsCalculator {
             metrics.stability_score = 1.0 / (1.0 + metrics.population_variance / avg_population);
         }
 
-        metrics.overall_score = metrics.survival_score * 0.3
-            + metrics.growth_score * 0.2
-            + metrics.economic_efficiency * 0.2
-            + metrics.trade_effectiveness * 0.1
-            + metrics.stability_score * 0.2;
+        // Overall score is the growth multiplier (final_population / initial_population)
+        metrics.overall_score = if initial_population > 0 {
+            metrics.final_population as f64 / initial_population as f64
+        } else if metrics.final_population > 0 {
+            // If started with 0 but have population now, that's infinite growth - cap at 10x
+            10.0
+        } else {
+            0.0
+        };
 
         metrics
     }
@@ -303,12 +309,12 @@ impl MetricsCalculator {
 impl std::fmt::Display for VillageMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Village {} Metrics:", self.village_id)?;
-        writeln!(f, "  Overall Score: {:.2}", self.overall_score)?;
+        writeln!(f, "  Overall Score: {:.2}x", self.overall_score)?;
         writeln!(
             f,
             "  - Survival: {:.2} ({}→{} pop)",
             self.survival_score,
-            self.peak_population - self.final_population + self.total_births - self.total_deaths,
+            self.initial_population,
             self.final_population
         )?;
         writeln!(
@@ -350,9 +356,11 @@ impl std::fmt::Display for ScenarioMetrics {
             "  Economic Inequality (Gini): {:.3}",
             self.economic_inequality
         )?;
-        writeln!(f, "\nVillage Scores:")?;
-        for (id, metrics) in &self.villages {
-            writeln!(f, "  {}: {:.2}", id, metrics.overall_score)?;
+        writeln!(f, "\nVillage Scores (Growth Multiplier):")?;
+        let mut sorted_villages: Vec<_> = self.villages.iter().collect();
+        sorted_villages.sort_by(|a, b| b.1.overall_score.partial_cmp(&a.1.overall_score).unwrap());
+        for (id, metrics) in sorted_villages {
+            writeln!(f, "  {}: {:.2}x", id, metrics.overall_score)?;
         }
         Ok(())
     }
