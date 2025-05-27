@@ -72,12 +72,11 @@ pub struct PriceHistory {
 /// Load and analyze simulation events from a file.
 pub fn analyze_simulation(path: &Path) -> Result<SimulationAnalysis, String> {
     // Load events
-    let contents = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    
-    let events: Vec<Event> = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
-    
+    let contents = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let events: Vec<Event> =
+        serde_json::from_str(&contents).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
     analyze_events(&events)
 }
 
@@ -86,34 +85,44 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
     let mut villages: HashMap<String, VillageData> = HashMap::new();
     let mut market_data = MarketData::default();
     let mut max_tick = 0;
-    
+
     // Process each event
     for event in events {
         max_tick = max_tick.max(event.tick);
-        
+
         match &event.event_type {
-            EventType::WorkerAllocation { food_workers, wood_workers, .. } => {
+            EventType::WorkerAllocation {
+                food_workers,
+                wood_workers,
+                ..
+            } => {
                 // Track worker allocation patterns
                 let village = villages.entry(event.village_id.clone()).or_default();
-                village.allocations.push((*food_workers as u32, *wood_workers as u32));
+                village
+                    .allocations
+                    .push((*food_workers as u32, *wood_workers as u32));
             }
-            
-            EventType::ResourceProduced { resource, amount, .. } => {
+
+            EventType::ResourceProduced {
+                resource, amount, ..
+            } => {
                 let village = villages.entry(event.village_id.clone()).or_default();
                 match resource {
                     ResourceType::Food => village.total_production.food += amount,
                     ResourceType::Wood => village.total_production.wood += amount,
                 }
             }
-            
-            EventType::ResourceConsumed { resource, amount, .. } => {
+
+            EventType::ResourceConsumed {
+                resource, amount, ..
+            } => {
                 let village = villages.entry(event.village_id.clone()).or_default();
                 match resource {
                     ResourceType::Food => village.total_consumption.food += amount,
                     ResourceType::Wood => village.total_consumption.wood += amount,
                 }
             }
-            
+
             EventType::VillageStateSnapshot { population, .. } => {
                 let village = villages.entry(event.village_id.clone()).or_default();
                 village.population_history.push((event.tick, *population));
@@ -123,12 +132,12 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
                 village.final_population = *population;
                 village.peak_population = village.peak_population.max(*population);
             }
-            
+
             EventType::WorkerDied { cause, .. } => {
                 let village = villages.entry(event.village_id.clone()).or_default();
                 *village.deaths.entry(format!("{:?}", cause)).or_insert(0) += 1;
             }
-            
+
             EventType::OrderPlaced { side, .. } => {
                 market_data.total_orders += 1;
                 let village = villages.entry(event.village_id.clone()).or_default();
@@ -137,13 +146,19 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
                     TradeSide::Sell => village.trading.sell_orders += 1,
                 }
             }
-            
-            EventType::TradeExecuted { resource, quantity, price, side, .. } => {
+
+            EventType::TradeExecuted {
+                resource,
+                quantity,
+                price,
+                side,
+                ..
+            } => {
                 market_data.total_trades += 1;
                 let village = villages.entry(event.village_id.clone()).or_default();
                 village.trading.total_trades += 1;
-                
-                let value = price * Decimal::from(*quantity);
+
+                let value = price * *quantity;
                 match side {
                     TradeSide::Buy => {
                         village.trading.executed_buys += 1;
@@ -154,16 +169,19 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
                         village.trading.total_earned += value;
                     }
                 }
-                
+
                 // Track market prices
                 match resource {
                     ResourceType::Wood => market_data.wood_prices.push((event.tick, *price)),
                     ResourceType::Food => market_data.food_prices.push((event.tick, *price)),
                 }
-                
-                *market_data.volume_by_resource.entry(format!("{:?}", resource)).or_insert(Decimal::ZERO) += Decimal::from(*quantity);
+
+                *market_data
+                    .volume_by_resource
+                    .entry(format!("{:?}", resource))
+                    .or_insert(Decimal::ZERO) += *quantity;
             }
-            
+
             // TODO: Add AuctionCleared event handling when the event type is available
             // EventType::AuctionCleared { clearing_prices } => {
             //     for (resource, price) in clearing_prices {
@@ -173,30 +191,30 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
             //         }
             //     }
             // }
-            
             _ => {}
         }
     }
-    
+
     // Convert to analysis results
     let mut village_analyses = Vec::new();
     for (id, data) in villages {
         let growth_rate = if data.initial_population > 0 {
-            (data.final_population as f64 - data.initial_population as f64) / data.initial_population as f64
+            (data.final_population as f64 - data.initial_population as f64)
+                / data.initial_population as f64
         } else {
             0.0
         };
-        
+
         let survival_rate = if data.initial_population > 0 {
             data.final_population as f64 / data.initial_population as f64
         } else {
             1.0
         };
-        
+
         let net_profit = data.trading.total_earned - data.trading.total_spent;
-        
+
         let effectiveness = calculate_effectiveness(&data);
-        
+
         village_analyses.push(VillageAnalysis {
             id: id.clone(),
             initial_population: data.initial_population,
@@ -214,7 +232,7 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
             strategy_effectiveness: effectiveness,
         });
     }
-    
+
     // Calculate market statistics
     let price_history = calculate_price_statistics(&market_data);
     let trade_success_rate = if market_data.total_orders > 0 {
@@ -222,10 +240,10 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
     } else {
         0.0
     };
-    
+
     // Generate insights
     let insights = generate_insights(&village_analyses, &price_history, max_tick);
-    
+
     Ok(SimulationAnalysis {
         total_events: events.len(),
         total_days: max_tick + 1,
@@ -244,19 +262,21 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
 /// Compare multiple simulation results.
 pub fn compare_simulations(analyses: &[SimulationAnalysis]) -> ComparisonReport {
     let mut report = ComparisonReport::default();
-    
+
     // Compare overall performance
     for (i, analysis) in analyses.iter().enumerate() {
-        let avg_growth = analysis.villages.iter()
-            .map(|v| v.growth_rate)
-            .sum::<f64>() / analysis.villages.len() as f64;
-        
-        let avg_survival = analysis.villages.iter()
+        let avg_growth = analysis.villages.iter().map(|v| v.growth_rate).sum::<f64>()
+            / analysis.villages.len() as f64;
+
+        let avg_survival = analysis
+            .villages
+            .iter()
             .map(|v| v.survival_rate)
-            .sum::<f64>() / analysis.villages.len() as f64;
-        
+            .sum::<f64>()
+            / analysis.villages.len() as f64;
+
         let total_trades = analysis.market.total_trades;
-        
+
         report.simulation_summaries.push(SimulationSummary {
             index: i,
             avg_growth_rate: avg_growth,
@@ -265,51 +285,61 @@ pub fn compare_simulations(analyses: &[SimulationAnalysis]) -> ComparisonReport 
             trade_success_rate: analysis.market.trade_success_rate,
         });
     }
-    
+
     // Find best performing strategies
     let mut strategy_performance: HashMap<String, Vec<f64>> = HashMap::new();
     for analysis in analyses {
         for village in &analysis.villages {
             if let Some(strategy) = extract_strategy_name(&village.id) {
-                strategy_performance.entry(strategy)
+                strategy_performance
+                    .entry(strategy)
                     .or_default()
                     .push(village.strategy_effectiveness);
             }
         }
     }
-    
+
     for (strategy, scores) in strategy_performance {
         let avg_score = scores.iter().sum::<f64>() / scores.len() as f64;
         report.strategy_rankings.push((strategy, avg_score));
     }
-    
-    report.strategy_rankings.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    
+
+    report
+        .strategy_rankings
+        .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
     report
 }
 
 /// Generate a narrative explanation of simulation events.
 pub fn explain_simulation(analysis: &SimulationAnalysis) -> String {
     let mut explanation = String::new();
-    
-    explanation.push_str(&format!("# Simulation Narrative ({} days)\n\n", analysis.total_days));
-    
+
+    explanation.push_str(&format!(
+        "# Simulation Narrative ({} days)\n\n",
+        analysis.total_days
+    ));
+
     // Overall summary
     explanation.push_str("## Overview\n\n");
     let total_initial_pop: usize = analysis.villages.iter().map(|v| v.initial_population).sum();
     let total_final_pop: usize = analysis.villages.iter().map(|v| v.final_population).sum();
-    
+
     explanation.push_str(&format!(
         "The simulation began with {} workers across {} villages. \
          After {} days, the total population {} to {} workers ({:+.1}%).\n\n",
         total_initial_pop,
         analysis.villages.len(),
         analysis.total_days,
-        if total_final_pop >= total_initial_pop { "grew" } else { "shrank" },
+        if total_final_pop >= total_initial_pop {
+            "grew"
+        } else {
+            "shrank"
+        },
         total_final_pop,
         ((total_final_pop as f64 - total_initial_pop as f64) / total_initial_pop as f64) * 100.0
     ));
-    
+
     // Market activity
     if analysis.market.total_trades > 0 {
         explanation.push_str(&format!(
@@ -318,7 +348,10 @@ pub fn explain_simulation(analysis: &SimulationAnalysis) -> String {
             analysis.market.total_trades,
             analysis.market.total_orders,
             analysis.market.trade_success_rate * 100.0,
-            analysis.market.volume_by_resource.iter()
+            analysis
+                .market
+                .volume_by_resource
+                .iter()
                 .max_by_key(|(_, v)| **v)
                 .map(|(k, _)| k)
                 .unwrap_or(&"none".to_string())
@@ -326,12 +359,12 @@ pub fn explain_simulation(analysis: &SimulationAnalysis) -> String {
     } else {
         explanation.push_str("No trading occurred during the simulation.\n\n");
     }
-    
+
     // Village stories
     explanation.push_str("## Village Stories\n\n");
     for village in &analysis.villages {
         explanation.push_str(&format!("### {}\n\n", village.id));
-        
+
         let fate = if village.final_population == 0 {
             "completely died out"
         } else if village.final_population < village.initial_population {
@@ -343,44 +376,50 @@ pub fn explain_simulation(analysis: &SimulationAnalysis) -> String {
         } else {
             "maintained its population"
         };
-        
+
         explanation.push_str(&format!(
             "{} {} over the simulation period, going from {} to {} workers.\n",
             village.id, fate, village.initial_population, village.final_population
         ));
-        
+
         // Deaths
         if !village.worker_deaths.is_empty() {
             let total_deaths: usize = village.worker_deaths.values().sum();
-            let main_cause = village.worker_deaths.iter()
+            let main_cause = village
+                .worker_deaths
+                .iter()
                 .max_by_key(|(_, v)| **v)
                 .map(|(k, _)| k.as_str())
                 .unwrap_or("unknown");
-            
+
             explanation.push_str(&format!(
                 "The village lost {} workers, primarily due to {}.\n",
                 total_deaths, main_cause
             ));
         }
-        
+
         // Trading
         if village.trading_summary.total_trades > 0 {
-            if village.trading_summary.net_profit > Decimal::ZERO {
-                explanation.push_str(&format!(
-                    "Through shrewd trading, they earned a profit of {:.2}.\n",
-                    village.trading_summary.net_profit
-                ));
-            } else if village.trading_summary.net_profit < Decimal::ZERO {
-                explanation.push_str(&format!(
-                    "Trading proved costly, with losses of {:.2}.\n",
-                    village.trading_summary.net_profit.abs()
-                ));
+            match village.trading_summary.net_profit.cmp(&Decimal::ZERO) {
+                std::cmp::Ordering::Greater => {
+                    explanation.push_str(&format!(
+                        "Through shrewd trading, they earned a profit of {:.2}.\n",
+                        village.trading_summary.net_profit
+                    ));
+                }
+                std::cmp::Ordering::Less => {
+                    explanation.push_str(&format!(
+                        "Trading proved costly, with losses of {:.2}.\n",
+                        village.trading_summary.net_profit.abs()
+                    ));
+                }
+                std::cmp::Ordering::Equal => {}
             }
         }
-        
-        explanation.push_str("\n");
+
+        explanation.push('\n');
     }
-    
+
     // Key insights
     if !analysis.insights.is_empty() {
         explanation.push_str("## Key Insights\n\n");
@@ -388,7 +427,7 @@ pub fn explain_simulation(analysis: &SimulationAnalysis) -> String {
             explanation.push_str(&format!("- {}\n", insight));
         }
     }
-    
+
     explanation
 }
 
@@ -437,7 +476,7 @@ fn calculate_effectiveness(data: &VillageData) -> f64 {
     } else {
         0.0
     };
-    
+
     let efficiency_score = if data.final_population > 0 {
         let total_produced = data.total_production.food + data.total_production.wood;
         let avg_pop = (data.initial_population + data.final_population) as f64 / 2.0;
@@ -445,48 +484,52 @@ fn calculate_effectiveness(data: &VillageData) -> f64 {
     } else {
         0.0
     };
-    
+
     let trade_score = if data.trading.total_trades > 0 {
         let profit_per_trade = data.trading.net_profit / Decimal::from(data.trading.total_trades);
-        (1.0 + profit_per_trade.to_f64().unwrap_or(0.0) / 10.0).max(0.0).min(2.0)
+        (1.0 + profit_per_trade.to_f64().unwrap_or(0.0) / 10.0).clamp(0.0, 2.0)
     } else {
         1.0
     };
-    
+
     (growth_score + efficiency_score + trade_score) / 3.0
 }
 
 fn calculate_price_statistics(market_data: &MarketData) -> PriceHistory {
     let mut history = PriceHistory::default();
-    
+
     // Wood prices
     if !market_data.wood_prices.is_empty() {
         history.wood_prices = market_data.wood_prices.clone();
         let sum: Decimal = market_data.wood_prices.iter().map(|(_, p)| *p).sum();
         history.avg_wood_price = Some(sum / Decimal::from(market_data.wood_prices.len()));
-        
+
         if market_data.wood_prices.len() > 1 {
-            let prices: Vec<f64> = market_data.wood_prices.iter()
+            let prices: Vec<f64> = market_data
+                .wood_prices
+                .iter()
                 .map(|(_, p)| p.to_f64().unwrap_or(0.0))
                 .collect();
             history.wood_volatility = calculate_volatility(&prices);
         }
     }
-    
+
     // Food prices
     if !market_data.food_prices.is_empty() {
         history.food_prices = market_data.food_prices.clone();
         let sum: Decimal = market_data.food_prices.iter().map(|(_, p)| *p).sum();
         history.avg_food_price = Some(sum / Decimal::from(market_data.food_prices.len()));
-        
+
         if market_data.food_prices.len() > 1 {
-            let prices: Vec<f64> = market_data.food_prices.iter()
+            let prices: Vec<f64> = market_data
+                .food_prices
+                .iter()
                 .map(|(_, p)| p.to_f64().unwrap_or(0.0))
                 .collect();
             history.food_volatility = calculate_volatility(&prices);
         }
     }
-    
+
     history
 }
 
@@ -494,50 +537,67 @@ fn calculate_volatility(prices: &[f64]) -> f64 {
     if prices.len() < 2 {
         return 0.0;
     }
-    
+
     let mean = prices.iter().sum::<f64>() / prices.len() as f64;
-    let variance = prices.iter()
-        .map(|p| (p - mean).powi(2))
-        .sum::<f64>() / prices.len() as f64;
-    
+    let variance = prices.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / prices.len() as f64;
+
     variance.sqrt() / mean
 }
 
-fn generate_insights(villages: &[VillageAnalysis], price_history: &PriceHistory, total_days: usize) -> Vec<String> {
+fn generate_insights(
+    villages: &[VillageAnalysis],
+    price_history: &PriceHistory,
+    total_days: usize,
+) -> Vec<String> {
     let mut insights = Vec::new();
-    
+
     // Population insights
-    let total_growth: f64 = villages.iter().map(|v| v.growth_rate).sum::<f64>() / villages.len() as f64;
+    let total_growth: f64 =
+        villages.iter().map(|v| v.growth_rate).sum::<f64>() / villages.len() as f64;
     if total_growth < 0.0 {
-        insights.push("Population declined overall - check resource availability and strategy effectiveness".to_string());
+        insights.push(
+            "Population declined overall - check resource availability and strategy effectiveness"
+                .to_string(),
+        );
     } else if total_growth < 0.1 && total_days >= 100 {
-        insights.push("Minimal population growth suggests timing issues - consider adjusting growth delay".to_string());
+        insights.push(
+            "Minimal population growth suggests timing issues - consider adjusting growth delay"
+                .to_string(),
+        );
     }
-    
+
     // Trading insights
-    let villages_that_traded = villages.iter().filter(|v| v.trading_summary.total_trades > 0).count();
+    let villages_that_traded = villages
+        .iter()
+        .filter(|v| v.trading_summary.total_trades > 0)
+        .count();
     if villages_that_traded == 0 {
-        insights.push("No trading occurred - strategies may be too similar or prices misaligned".to_string());
+        insights.push(
+            "No trading occurred - strategies may be too similar or prices misaligned".to_string(),
+        );
     } else if villages_that_traded == 1 {
-        insights.push("Only one village participated in trading - market may be one-sided".to_string());
+        insights
+            .push("Only one village participated in trading - market may be one-sided".to_string());
     }
-    
+
     // Price insights
     if price_history.wood_volatility > 0.3 {
-        insights.push("High wood price volatility indicates unstable market conditions".to_string());
+        insights
+            .push("High wood price volatility indicates unstable market conditions".to_string());
     }
     if price_history.food_volatility > 0.3 {
-        insights.push("High food price volatility indicates unstable market conditions".to_string());
+        insights
+            .push("High food price volatility indicates unstable market conditions".to_string());
     }
-    
+
     // Death insights
-    let total_deaths: usize = villages.iter()
-        .flat_map(|v| v.worker_deaths.values())
-        .sum();
+    let total_deaths: usize = villages.iter().flat_map(|v| v.worker_deaths.values()).sum();
     if total_deaths > villages.iter().map(|v| v.initial_population).sum::<usize>() / 2 {
-        insights.push("High death rate indicates severe resource shortages or strategy failures".to_string());
+        insights.push(
+            "High death rate indicates severe resource shortages or strategy failures".to_string(),
+        );
     }
-    
+
     insights
 }
 

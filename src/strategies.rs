@@ -325,7 +325,8 @@ impl GrowthStrategy {
         // Convert target population to worker-to-house ratio
         // Assuming house capacity of 5, we want ratio that allows for target_population
         let target_ratio = if target_population > 0 {
-            (target_population as f64 - house_buffer as f64) / (target_population as f64 / 5.0).max(1.0)
+            (target_population as f64 - house_buffer as f64)
+                / (target_population as f64 / 5.0).max(1.0)
         } else {
             3.5
         };
@@ -360,7 +361,8 @@ impl Strategy for GrowthStrategy {
         // Calculate if we need more houses, accounting for buffer
         let current_ratio = village.workers as f64 / village.house_capacity.max(1) as f64;
         let available_slots = village.house_capacity.saturating_sub(village.workers);
-        let need_houses = current_ratio > self.target_worker_to_house_ratio || available_slots < self.house_buffer;
+        let need_houses = current_ratio > self.target_worker_to_house_ratio
+            || available_slots < self.house_buffer;
 
         // Base allocation for growth
         let mut allocation = WorkerAllocation {
@@ -473,8 +475,9 @@ impl Strategy for TradingStrategy {
         let worker_days = village.worker_days;
 
         // Determine specialization based on production slots
-        let specialize_food = village.food_slots.0 > village.wood_slots.0 ||
-            (village.food_slots.0 == village.wood_slots.0 && village.food_slots.1 > village.wood_slots.1);
+        let specialize_food = village.food_slots.0 > village.wood_slots.0
+            || (village.food_slots.0 == village.wood_slots.0
+                && village.food_slots.1 > village.wood_slots.1);
 
         // Heavy specialization
         let allocation = if specialize_food {
@@ -500,29 +503,47 @@ impl Strategy for TradingStrategy {
         if specialize_food {
             // Sell food aggressively
             if village.food > dec!(20) {
-                let quantity = (village.food * self.max_trade_fraction).to_u32().unwrap_or(0).min(100);
-                let price = calculate_food_ask_price(market.last_food_price, dec!(0.95) * self.price_multiplier);
+                let quantity = (village.food * self.max_trade_fraction)
+                    .to_u32()
+                    .unwrap_or(0)
+                    .min(100);
+                let price = calculate_food_ask_price(
+                    market.last_food_price,
+                    dec!(0.95) * self.price_multiplier,
+                );
                 food_ask = Some((price, quantity));
             }
 
             // Buy wood as needed
             if village.wood < dec!(20) && village.money > dec!(10) {
                 let quantity = 30u32;
-                let price = calculate_wood_bid_price(market.last_wood_price, dec!(1.05) * self.price_multiplier);
+                let price = calculate_wood_bid_price(
+                    market.last_wood_price,
+                    dec!(1.05) * self.price_multiplier,
+                );
                 wood_bid = Some((price, quantity));
             }
         } else {
             // Sell wood aggressively
             if village.wood > dec!(10) {
-                let quantity = (village.wood * self.max_trade_fraction).to_u32().unwrap_or(0).min(30);
-                let price = calculate_wood_ask_price(market.last_wood_price, dec!(0.95) * self.price_multiplier);
+                let quantity = (village.wood * self.max_trade_fraction)
+                    .to_u32()
+                    .unwrap_or(0)
+                    .min(30);
+                let price = calculate_wood_ask_price(
+                    market.last_wood_price,
+                    dec!(0.95) * self.price_multiplier,
+                );
                 wood_ask = Some((price, quantity));
             }
 
             // Buy food as needed
             if village.food < dec!(30) && village.money > dec!(10) {
                 let quantity = (village.workers as u32 * 20).min(100);
-                let price = calculate_food_bid_price(market.last_food_price, dec!(1.05) * self.price_multiplier);
+                let price = calculate_food_bid_price(
+                    market.last_food_price,
+                    dec!(1.05) * self.price_multiplier,
+                );
                 food_bid = Some((price, quantity));
             }
         }
@@ -560,7 +581,12 @@ pub struct BalancedStrategy {
 }
 
 impl BalancedStrategy {
-    pub fn new(food_weight: f64, wood_weight: f64, construction_weight: f64, repair_weight: f64) -> Self {
+    pub fn new(
+        food_weight: f64,
+        wood_weight: f64,
+        construction_weight: f64,
+        repair_weight: f64,
+    ) -> Self {
         Self {
             food_weight,
             wood_weight,
@@ -603,18 +629,18 @@ impl Strategy for BalancedStrategy {
         // Dynamic weights based on needs and configuration
         let food_urgency = calculate_resource_urgency(food_days, 10.0) * self.food_weight;
         let wood_urgency = calculate_resource_urgency(wood_days, 20.0) * self.wood_weight;
-        
+
         // Calculate construction need (new houses)
         let new_house_need = if village.workers > village.house_capacity {
             0.3 * self.construction_weight
         } else {
             0.1 * self.construction_weight
         };
-        
+
         // Calculate repair need based on number of houses
         // More houses = more repair needed
         let repair_need = (village.houses as f64 * 0.02 * self.repair_weight).min(0.2);
-        
+
         // Combined construction effort for both new houses and repairs
         let construction_need = new_house_need + repair_need;
 
@@ -816,11 +842,19 @@ pub fn create_strategy(config: &StrategyConfig) -> Box<dyn Strategy> {
             wood_weight,
             construction_weight,
             repair_weight,
-        } => Box::new(BalancedStrategy::new(*food_weight, *wood_weight, *construction_weight, *repair_weight)),
+        } => Box::new(BalancedStrategy::new(
+            *food_weight,
+            *wood_weight,
+            *construction_weight,
+            *repair_weight,
+        )),
         StrategyConfig::Survival {
             min_food_days,
             min_shelter_buffer,
-        } => Box::new(SurvivalStrategy::new(*min_food_days as u32, *min_shelter_buffer as u32)),
+        } => Box::new(SurvivalStrategy::new(
+            *min_food_days as u32,
+            *min_shelter_buffer as u32,
+        )),
         StrategyConfig::Growth {
             target_population,
             house_buffer,

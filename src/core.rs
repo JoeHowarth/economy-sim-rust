@@ -1,6 +1,6 @@
+use rand;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use rand;
 
 #[derive(Default, Clone)]
 pub struct Worker {
@@ -68,7 +68,7 @@ pub struct Village {
     // For tracking births/deaths
     pub next_worker_id: usize,
     pub next_house_id: usize,
-    
+
     // Random number generator
     pub rng: Option<rand::rngs::StdRng>,
 }
@@ -77,11 +77,11 @@ impl Village {
     pub fn worker_days(&self) -> Decimal {
         self.workers.iter().map(|w| w.productivity()).sum()
     }
-    
+
     /// Check if a new worker should spawn (5% chance)
     pub fn should_spawn_worker(&mut self) -> bool {
         use rand::Rng;
-        
+
         if let Some(ref mut rng) = self.rng {
             rng.random_bool(0.05)
         } else {

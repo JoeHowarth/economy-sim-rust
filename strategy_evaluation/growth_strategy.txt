@@ -1,0 +1,85 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/village-model-sim run --scenario-file scenarios/trading_specialization.json -s growth -s growth -s growth --output strategy_evaluation/growth_strategy.json`
+⚠️  WARNING: Village food_specialist has low initial food (100 < 150 recommended)
+⚠️  WARNING: Village wood_specialist has low initial food (50 < 150 recommended)
+⚠️  WARNING: Village balanced_trader has low initial food (75 < 100 recommended)
+Scenario: trading_specialization
+Description: Villages specialized in different resources to encourage trading
+
+Parameters:
+  Days to simulate: 250
+  Starvation after: 10 days
+  Death without shelter after: 30 days
+  Growth starts after: 50 days
+  Growth chance: 5%
+  House construction: 10 wood, 60 days
+
+Villages:
+
+  Village: food_specialist
+    Initial population: 15
+    Initial houses: 3
+    Initial resources: 100 food, 50 wood, 500 money
+    Production slots: 20 food, 5 wood
+    Strategy: Trading { price_multiplier: 1.0, max_trade_fraction: 0.3 }
+
+  Village: wood_specialist
+    Initial population: 15
+    Initial houses: 3
+    Initial resources: 50 food, 100 wood, 500 money
+    Production slots: 5 food, 20 wood
+    Strategy: Trading { price_multiplier: 1.0, max_trade_fraction: 0.3 }
+
+  Village: balanced_trader
+    Initial population: 10
+    Initial houses: 2
+    Initial resources: 75 food, 75 wood, 400 money
+    Production slots: 10 food, 10 wood
+    Strategy: Balanced { food_weight: 0.25, wood_weight: 0.25, construction_weight: 0.25, repair_weight: 0.25 }
+
+
+Villages with strategies:
+  food_specialist: growth
+  wood_specialist: growth
+  balanced_trader: growth
+
+Events saved to strategy_evaluation/growth_strategy.json
+
+Scenario Metrics (250 days):
+  Aggregate Survival Rate: 260.0%
+  Aggregate Growth Rate: 172.5%
+  Total Trade Volume: 80
+  Economic Inequality (Gini): 0.250
+
+Village Scores (Growth Multiplier):
+  balanced_trader: 3.90x
+  food_specialist: 3.47x
+  wood_specialist: 0.87x
+
+
+Village balanced_trader Metrics:
+  Overall Score: 3.90x
+  - Survival: 1.00 (10→39 pop)
+  - Growth: 2.90 (peak 39)
+  - Efficiency: 0.73 res/worker/day
+  - Trade: 0.00 profit/trade
+  - Stability: 0.74 (σ=8.7)
+
+
+Village food_specialist Metrics:
+  Overall Score: 3.47x
+  - Survival: 1.00 (15→52 pop)
+  - Growth: 2.47 (peak 52)
+  - Efficiency: 0.84 res/worker/day
+  - Trade: -130.00 profit/trade
+  - Stability: 0.75 (σ=11.0)
+
+
+Village wood_specialist Metrics:
+  Overall Score: 0.87x
+  - Survival: 0.87 (15→13 pop)
+  - Growth: 0.20 (peak 18)
+  - Efficiency: 0.90 res/worker/day
+  - Trade: 130.00 profit/trade
+  - Stability: 0.92 (σ=1.2)
+

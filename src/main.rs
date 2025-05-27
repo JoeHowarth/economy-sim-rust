@@ -43,7 +43,7 @@ use village_model::{
     analysis::{analyze_simulation, compare_simulations, explain_simulation},
     auction::{FinalFill, run_auction},
     auction_builder::AuctionBuilder,
-    cli::{parse_args, apply_overrides, validate_scenario, Command},
+    cli::{Command, apply_overrides, parse_args, validate_scenario},
     core::{Allocation, House, Village, Worker},
     events::{ConsumptionPurpose, DeathCause, EventLogger, EventType, TradeSide},
     metrics::MetricsCalculator,
@@ -393,10 +393,10 @@ fn process_worker_lifecycle(
             },
         );
     }
-    
+
     // Collect eligible workers
     let eligible_count = village.workers.iter().filter(|w| w.spawn_eligible).count();
-    
+
     // Handle spawning for eligible workers
     for _ in 0..eligible_count {
         if village.should_spawn_worker() {
@@ -724,11 +724,9 @@ fn main() {
 
     // Set up logging if debug mode is enabled
     if args.debug {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
-            .init();
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
     } else if args.verbose {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .init();
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
 
     // Execute command
@@ -742,40 +740,40 @@ fn main() {
                 process::exit(1);
             }
         }
-        Command::Analyze { file } => {
-            match analyze_simulation(&file) {
-                Ok(analysis) => {
-                    println!("\n=== Simulation Analysis ===");
-                    println!("Total Events: {}", analysis.total_events);
-                    println!("Duration: {} days", analysis.total_days);
-                    println!("\nVillage Performance:");
-                    for village in &analysis.villages {
-                        println!("  {}: {} -> {} workers ({:+.1}% growth)",
-                            village.id,
-                            village.initial_population,
-                            village.final_population,
-                            village.growth_rate * 100.0
-                        );
-                    }
-                    println!("\nMarket Activity:");
-                    println!("  Orders: {}", analysis.market.total_orders);
-                    println!("  Trades: {} ({:.1}% success rate)",
-                        analysis.market.total_trades,
-                        analysis.market.trade_success_rate * 100.0
+        Command::Analyze { file } => match analyze_simulation(&file) {
+            Ok(analysis) => {
+                println!("\n=== Simulation Analysis ===");
+                println!("Total Events: {}", analysis.total_events);
+                println!("Duration: {} days", analysis.total_days);
+                println!("\nVillage Performance:");
+                for village in &analysis.villages {
+                    println!(
+                        "  {}: {} -> {} workers ({:+.1}% growth)",
+                        village.id,
+                        village.initial_population,
+                        village.final_population,
+                        village.growth_rate * 100.0
                     );
-                    if !analysis.insights.is_empty() {
-                        println!("\nInsights:");
-                        for insight in &analysis.insights {
-                            println!("  - {}", insight);
-                        }
-                    }
                 }
-                Err(e) => {
-                    eprintln!("Error analyzing simulation: {}", e);
-                    process::exit(1);
+                println!("\nMarket Activity:");
+                println!("  Orders: {}", analysis.market.total_orders);
+                println!(
+                    "  Trades: {} ({:.1}% success rate)",
+                    analysis.market.total_trades,
+                    analysis.market.trade_success_rate * 100.0
+                );
+                if !analysis.insights.is_empty() {
+                    println!("\nInsights:");
+                    for insight in &analysis.insights {
+                        println!("  - {}", insight);
+                    }
                 }
             }
-        }
+            Err(e) => {
+                eprintln!("Error analyzing simulation: {}", e);
+                process::exit(1);
+            }
+        },
         Command::Compare { files } => {
             let mut analyses = Vec::new();
             for file in &files {
@@ -787,17 +785,26 @@ fn main() {
                     }
                 }
             }
-            
+
             let report = compare_simulations(&analyses);
             println!("\n=== Simulation Comparison ===");
             for (i, summary) in report.simulation_summaries.iter().enumerate() {
                 println!("\nSimulation {} ({}):", i + 1, files[i].display());
-                println!("  Avg Growth Rate: {:+.1}%", summary.avg_growth_rate * 100.0);
-                println!("  Avg Survival Rate: {:.1}%", summary.avg_survival_rate * 100.0);
+                println!(
+                    "  Avg Growth Rate: {:+.1}%",
+                    summary.avg_growth_rate * 100.0
+                );
+                println!(
+                    "  Avg Survival Rate: {:.1}%",
+                    summary.avg_survival_rate * 100.0
+                );
                 println!("  Total Trades: {}", summary.total_trades);
-                println!("  Trade Success Rate: {:.1}%", summary.trade_success_rate * 100.0);
+                println!(
+                    "  Trade Success Rate: {:.1}%",
+                    summary.trade_success_rate * 100.0
+                );
             }
-            
+
             if !report.strategy_rankings.is_empty() {
                 println!("\nStrategy Rankings:");
                 for (rank, (strategy, score)) in report.strategy_rankings.iter().enumerate() {
@@ -805,21 +812,18 @@ fn main() {
                 }
             }
         }
-        Command::Explain { file } => {
-            match analyze_simulation(&file) {
-                Ok(analysis) => {
-                    let explanation = explain_simulation(&analysis);
-                    println!("{}", explanation);
-                }
-                Err(e) => {
-                    eprintln!("Error analyzing simulation: {}", e);
-                    process::exit(1);
-                }
+        Command::Explain { file } => match analyze_simulation(&file) {
+            Ok(analysis) => {
+                let explanation = explain_simulation(&analysis);
+                println!("{}", explanation);
             }
-        }
+            Err(e) => {
+                eprintln!("Error analyzing simulation: {}", e);
+                process::exit(1);
+            }
+        },
     }
 }
-
 
 /// Runs the main simulation loop.
 ///
@@ -838,7 +842,7 @@ fn run_simulation(args: village_model::cli::CliArgs) {
     // Load scenario
     let mut scenario = if let Some(ref file) = args.scenario_file {
         // Load from file
-        match std::fs::read_to_string(&file) {
+        match std::fs::read_to_string(file) {
             Ok(contents) => {
                 match serde_json::from_str::<village_model::scenario::Scenario>(&contents) {
                     Ok(scenario) => scenario,
@@ -856,19 +860,22 @@ fn run_simulation(args: village_model::cli::CliArgs) {
     } else {
         // Use built-in scenario
         let scenarios = create_standard_scenarios();
-        scenarios.get(&args.scenario_name).cloned().unwrap_or_else(|| {
-            eprintln!("Unknown scenario: {}", args.scenario_name);
-            eprintln!(
-                "Available scenarios: {:?}",
-                scenarios.keys().collect::<Vec<_>>()
-            );
-            process::exit(1);
-        })
+        scenarios
+            .get(&args.scenario_name)
+            .cloned()
+            .unwrap_or_else(|| {
+                eprintln!("Unknown scenario: {}", args.scenario_name);
+                eprintln!(
+                    "Available scenarios: {:?}",
+                    scenarios.keys().collect::<Vec<_>>()
+                );
+                process::exit(1);
+            })
     };
 
     // Apply CLI overrides to scenario
     apply_overrides(&mut scenario, &args);
-    
+
     // Validate scenario configuration
     validate_scenario(&scenario, &args);
 
@@ -881,13 +888,13 @@ fn run_simulation(args: village_model::cli::CliArgs) {
         .enumerate()
         .map(|(i, config)| village_from_config(i, config))
         .collect();
-    
+
     // Initialize random number generator if seed provided
     if let Some(seed) = scenario.random_seed {
         log::info!("Using random seed: {}", seed);
         use rand::SeedableRng;
         use rand::rngs::StdRng;
-        
+
         // Set up RNG for each village with deterministic seeds
         for (i, village) in villages.iter_mut().enumerate() {
             // Create a unique seed for each village based on the base seed
@@ -1030,7 +1037,8 @@ fn run_simulation(args: village_model::cli::CliArgs) {
     }
 
     // Save events
-    let filename = args.output_file
+    let filename = args
+        .output_file
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "simulation_events.json".to_string());

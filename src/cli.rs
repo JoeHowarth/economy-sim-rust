@@ -150,7 +150,9 @@ pub fn parse_args() -> Result<CliArgs, lexopt::Error> {
                 eprintln!("Error: compare command requires at least one file");
                 std::process::exit(1);
             }
-            Command::Compare { files: compare_files }
+            Command::Compare {
+                files: compare_files,
+            }
         }
         Some("explain") => Command::Explain {
             file: explain_file.unwrap_or_else(|| PathBuf::from("simulation_events.json")),
@@ -171,15 +173,15 @@ pub fn apply_overrides(scenario: &mut Scenario, args: &CliArgs) {
     if let Some(days) = args.days {
         scenario.parameters.days_to_simulate = days;
     }
-    
+
     if let Some(delay) = args.growth_delay {
         scenario.parameters.days_before_growth_chance = delay;
     }
-    
+
     if let Some(seed) = args.random_seed {
         scenario.random_seed = Some(seed);
     }
-    
+
     // Apply initial resource overrides to all villages
     for village in &mut scenario.villages {
         if let Some(food) = args.initial_food {
@@ -197,44 +199,51 @@ pub fn apply_overrides(scenario: &mut Scenario, args: &CliArgs) {
 /// Validate scenario configuration and print warnings.
 pub fn validate_scenario(scenario: &Scenario, args: &CliArgs) {
     let params = &scenario.parameters;
-    
+
     // Check growth timing issue
     if params.days_before_growth_chance >= params.days_to_simulate {
-        println!("\n⚠️  WARNING: Growth delay ({} days) >= simulation length ({} days)",
-                params.days_before_growth_chance, params.days_to_simulate);
+        println!(
+            "\n⚠️  WARNING: Growth delay ({} days) >= simulation length ({} days)",
+            params.days_before_growth_chance, params.days_to_simulate
+        );
         println!("   Villages will not have time to grow population!");
-        println!("   Consider using --days {} or --growth-delay {}\n",
-                params.days_before_growth_chance + 100,
-                params.days_to_simulate / 2);
+        println!(
+            "   Consider using --days {} or --growth-delay {}\n",
+            params.days_before_growth_chance + 100,
+            params.days_to_simulate / 2
+        );
     }
-    
+
     // Check for identical production slots with trading strategy
     if args.strategies.iter().any(|s| s == "trading") {
         let all_same_slots = scenario.villages.windows(2).all(|pair| {
-            pair[0].food_slots == pair[1].food_slots && 
-            pair[0].wood_slots == pair[1].wood_slots
+            pair[0].food_slots == pair[1].food_slots && pair[0].wood_slots == pair[1].wood_slots
         });
-        
+
         if all_same_slots && scenario.villages.len() > 1 {
             println!("⚠️  WARNING: All villages have identical production slots");
             println!("   Trading strategy may not specialize effectively!");
             println!("   Consider using different slot configurations\n");
         }
     }
-    
+
     // Check for insufficient starting resources
-    for (_i, village) in scenario.villages.iter().enumerate() {
+    for village in scenario.villages.iter() {
         let min_food_needed = Decimal::from(village.initial_workers * 10);
         let min_wood_needed = Decimal::from(10); // For at least one house
-        
+
         if village.initial_food < min_food_needed {
-            println!("⚠️  WARNING: Village {} has low initial food ({} < {} recommended)",
-                    village.id, village.initial_food, min_food_needed);
+            println!(
+                "⚠️  WARNING: Village {} has low initial food ({} < {} recommended)",
+                village.id, village.initial_food, min_food_needed
+            );
         }
-        
+
         if village.initial_wood < min_wood_needed && village.initial_houses < 2 {
-            println!("⚠️  WARNING: Village {} has low initial wood ({} < {} recommended)",
-                    village.id, village.initial_wood, min_wood_needed);
+            println!(
+                "⚠️  WARNING: Village {} has low initial wood ({} < {} recommended)",
+                village.id, village.initial_wood, min_wood_needed
+            );
         }
     }
 }
@@ -243,14 +252,14 @@ fn print_help() {
     println!("\nVillage Model Simulation - Enhanced CLI\n");
     println!("USAGE:");
     println!("    village-model-sim [COMMAND] [OPTIONS]\n");
-    
+
     println!("COMMANDS:");
     println!("    run              Run the simulation (default)");
     println!("    ui [FILE]        View simulation events in TUI");
     println!("    analyze [FILE]   Analyze simulation results");
     println!("    compare FILE...  Compare multiple simulation results");
     println!("    explain [FILE]   Generate narrative explanation of events\n");
-    
+
     println!("SIMULATION OPTIONS:");
     println!("    -s, --strategy <NAME>      Strategy for villages (can be used multiple times)");
     println!("                               Available: default, survival, growth, trading,");
@@ -263,13 +272,13 @@ fn print_help() {
     println!("    --initial-food <N>         Override initial food for all villages");
     println!("    --initial-wood <N>         Override initial wood for all villages");
     println!("    --initial-money <N>        Override initial money for all villages\n");
-    
+
     println!("OUTPUT OPTIONS:");
     println!("    -o, --output <FILE>        Output events to specified file");
     println!("    --debug                    Enable debug output");
     println!("    -v, --verbose              Enable verbose output");
     println!("    -h, --help                 Print help information\n");
-    
+
     println!("UI CONTROLS:");
     println!("    Space            Pause/Resume playback");
     println!("    ←/→              Step backward/forward through events");
@@ -277,17 +286,17 @@ fn print_help() {
     println!("    +/-              Faster/slower playback");
     println!("    Tab              Switch between views");
     println!("    Q                Quit\n");
-    
+
     println!("EXAMPLES:");
     println!("    # Run with custom parameters");
     println!("    village-model-sim run -s trading -s balanced --days 200 --growth-delay 50\n");
-    
+
     println!("    # Run with reproducible seed");
     println!("    village-model-sim run --seed 12345 --debug\n");
-    
+
     println!("    # Analyze simulation results");
     println!("    village-model-sim analyze simulation_events.json\n");
-    
+
     println!("    # Compare different strategies");
     println!("    village-model-sim compare survival.json growth.json trading.json");
 }

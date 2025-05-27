@@ -313,9 +313,7 @@ impl std::fmt::Display for VillageMetrics {
         writeln!(
             f,
             "  - Survival: {:.2} ({}→{} pop)",
-            self.survival_score,
-            self.initial_population,
-            self.final_population
+            self.survival_score, self.initial_population, self.final_population
         )?;
         writeln!(
             f,

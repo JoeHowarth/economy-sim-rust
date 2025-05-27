@@ -1,0 +1,27 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/village-model-sim compare strategy_evaluation/trading_strategy.json strategy_evaluation/balanced_strategy.json strategy_evaluation/growth_strategy.json`
+
+=== Simulation Comparison ===
+
+Simulation 1 (strategy_evaluation/trading_strategy.json):
+  Avg Growth Rate: -3.3%
+  Avg Survival Rate: 96.7%
+  Total Trades: 98
+  Trade Success Rate: 24.0%
+
+Simulation 2 (strategy_evaluation/balanced_strategy.json):
+  Avg Growth Rate: +61.1%
+  Avg Survival Rate: 161.1%
+  Total Trades: 9
+  Trade Success Rate: 1.4%
+
+Simulation 3 (strategy_evaluation/growth_strategy.json):
+  Avg Growth Rate: +174.4%
+  Avg Survival Rate: 274.4%
+  Total Trades: 4
+  Trade Success Rate: 0.9%
+
+Strategy Rankings:
+  1. food_specialist (score: 1.56)
+  2. balanced_trader (score: 1.25)
+  3. wood_specialist (score: 0.99)

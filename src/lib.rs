@@ -11,7 +11,6 @@ pub mod types;
 pub mod ui;
 pub mod visualization;
 
-
 #[cfg(test)]
 mod events_test;
 #[cfg(test)]

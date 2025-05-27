@@ -134,6 +134,7 @@ mod tests {
             trade_effectiveness: 0.3,
             stability_score: 0.9,
             overall_score: 0.7,
+            initial_population: 10,
             final_population: 8,
             peak_population: 12,
             total_births: 3,
