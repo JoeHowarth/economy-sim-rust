@@ -182,15 +182,15 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
                     .or_insert(Decimal::ZERO) += *quantity;
             }
 
-            // TODO: Add AuctionCleared event handling when the event type is available
-            // EventType::AuctionCleared { clearing_prices } => {
-            //     for (resource, price) in clearing_prices {
-            //         match resource {
-            //             ResourceType::Wood => market_data.wood_prices.push((event.tick, *price)),
-            //             ResourceType::Food => market_data.food_prices.push((event.tick, *price)),
-            //         }
-            //     }
-            // }
+            EventType::AuctionCleared { wood_price, food_price, .. } => {
+                if let Some(price) = wood_price {
+                    market_data.wood_prices.push((event.tick, *price));
+                }
+                if let Some(price) = food_price {
+                    market_data.food_prices.push((event.tick, *price));
+                }
+                // Note: volumes are already tracked through TradeExecuted events
+            }
             _ => {}
         }
     }
@@ -236,7 +236,7 @@ pub fn analyze_events(events: &[Event]) -> Result<SimulationAnalysis, String> {
     // Calculate market statistics
     let price_history = calculate_price_statistics(&market_data);
     let trade_success_rate = if market_data.total_orders > 0 {
-        (market_data.total_trades * 2) as f64 / market_data.total_orders as f64
+        market_data.total_trades as f64 / market_data.total_orders as f64
     } else {
         0.0
     };

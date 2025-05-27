@@ -115,15 +115,12 @@ pub fn analyze_batch(files: &[PathBuf]) -> Result<BatchAnalysisReport, String> {
             let strategy = extract_strategy_from_id(&village.id);
 
             if let Some(ref strat) = strategy {
-                strategy_data
-                    .entry(strat.clone())
-                    .or_default()
-                    .push((
-                        growth_multiplier,
-                        village.survival_rate,
-                        efficiency,
-                        village.trading_summary.net_profit,
-                    ));
+                strategy_data.entry(strat.clone()).or_default().push((
+                    growth_multiplier,
+                    village.survival_rate,
+                    efficiency,
+                    village.trading_summary.net_profit,
+                ));
             }
 
             village_summaries.push(VillageSummary {

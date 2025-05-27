@@ -304,4 +304,3 @@ fn parse_village_score(line: &str) -> Option<(String, f64)> {
         None
     }
 }
-

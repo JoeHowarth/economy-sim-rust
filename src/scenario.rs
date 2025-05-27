@@ -34,7 +34,7 @@ impl Default for SimulationParameters {
             days_to_simulate: 100,
             days_without_food_before_starvation: 10,
             days_without_shelter_before_death: 30,
-            days_before_growth_chance: 100,
+            days_before_growth_chance: 50,  // Changed from 100 to allow births before simulation ends
             growth_chance_per_day: 0.05,
             house_construction_days: 60,
             house_construction_wood: Decimal::from(10),
@@ -207,27 +207,27 @@ pub fn create_standard_scenarios() -> HashMap<String, Scenario> {
     let mut scenarios = HashMap::new();
 
     let mut basic = Scenario::new("basic_two_villages".to_string());
-    basic.description = "Two villages with balanced strategies".to_string();
+    basic.description = "Two villages with balanced strategies and complementary resources".to_string();
     basic.add_village(VillageConfig {
         id: "village_a".to_string(),
         initial_workers: 10,
         initial_houses: 2,
-        initial_food: Decimal::from(50),
-        initial_wood: Decimal::from(50),
+        initial_food: Decimal::from(70),  // More food
+        initial_wood: Decimal::from(30),  // Less wood
         initial_money: Decimal::from(100),
-        food_slots: (10, 10),
-        wood_slots: (10, 10),
+        food_slots: (12, 8),  // Better at food
+        wood_slots: (8, 12),  // Decent at wood
         strategy: StrategyConfig::default(),
     });
     basic.add_village(VillageConfig {
         id: "village_b".to_string(),
         initial_workers: 10,
         initial_houses: 2,
-        initial_food: Decimal::from(50),
-        initial_wood: Decimal::from(50),
+        initial_food: Decimal::from(30),  // Less food
+        initial_wood: Decimal::from(70),  // More wood
         initial_money: Decimal::from(100),
-        food_slots: (10, 10),
-        wood_slots: (10, 10),
+        food_slots: (8, 12),  // Decent at food
+        wood_slots: (12, 8),  // Better at wood
         strategy: StrategyConfig::default(),
     });
     scenarios.insert("basic".to_string(), basic);
@@ -240,22 +240,22 @@ pub fn create_standard_scenarios() -> HashMap<String, Scenario> {
         id: "village_1".to_string(),
         initial_workers: 10,
         initial_houses: 2,
-        initial_food: Decimal::from(50),
-        initial_wood: Decimal::from(50),
-        initial_money: Decimal::from(100),
-        food_slots: (10, 10),
-        wood_slots: (10, 10),
+        initial_food: Decimal::from(60),
+        initial_wood: Decimal::from(40),
+        initial_money: Decimal::from(120),
+        food_slots: (11, 9),
+        wood_slots: (9, 11),
         strategy: StrategyConfig::default(),
     });
     custom.add_village(VillageConfig {
         id: "village_2".to_string(),
         initial_workers: 10,
         initial_houses: 2,
-        initial_food: Decimal::from(50),
-        initial_wood: Decimal::from(50),
-        initial_money: Decimal::from(100),
-        food_slots: (10, 10),
-        wood_slots: (10, 10),
+        initial_food: Decimal::from(40),
+        initial_wood: Decimal::from(60),
+        initial_money: Decimal::from(80),
+        food_slots: (9, 11),
+        wood_slots: (11, 9),
         strategy: StrategyConfig::default(),
     });
     scenarios.insert("custom".to_string(), custom);

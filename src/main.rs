@@ -1151,6 +1151,30 @@ fn run_simulation(args: village_model::cli::CliArgs) {
             // Update last clearing prices for next tick
             last_clearing_prices = success.clearing_prices.clone();
 
+            // Log auction clearing event
+            let wood_volume = success.final_fills.iter()
+                .filter(|f| f.resource_id == village_model::auction::ResourceId("wood".to_string()) && 
+                           f.order_type == village_model::auction::OrderType::Bid)
+                .map(|f| f.filled_quantity)
+                .sum::<u64>();
+            let food_volume = success.final_fills.iter()
+                .filter(|f| f.resource_id == village_model::auction::ResourceId("food".to_string()) && 
+                           f.order_type == village_model::auction::OrderType::Bid)
+                .map(|f| f.filled_quantity)
+                .sum::<u64>();
+            
+            logger.log(
+                tick,
+                "market".to_string(),
+                EventType::AuctionCleared {
+                    wood_price: success.clearing_prices.get(&village_model::auction::ResourceId("wood".to_string())).cloned(),
+                    food_price: success.clearing_prices.get(&village_model::auction::ResourceId("food".to_string())).cloned(),
+                    wood_volume,
+                    food_volume,
+                    total_participants: success.final_balances.len(),
+                },
+            );
+
             // Apply trades to villages
             apply_trades(
                 &mut villages,

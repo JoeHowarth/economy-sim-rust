@@ -61,6 +61,36 @@ fn get_default_price(is_wood: bool) -> Decimal {
     if is_wood { dec!(5.0) } else { dec!(1.0) }
 }
 
+/// Calculate marginal productivity for a resource given current workers
+/// Returns productivity of the next worker assigned
+fn calculate_marginal_productivity(current_workers: u32, slots: (u32, u32)) -> Decimal {
+    if current_workers < slots.0 {
+        // First slot: 100% productivity
+        dec!(1.0)
+    } else if current_workers < slots.0 + slots.1 {
+        // Second slot: 75% productivity
+        dec!(0.75)
+    } else {
+        // Beyond slots: 0% productivity
+        dec!(0.0)
+    }
+}
+
+/// Calculate marginal cost of producing one unit of a resource
+/// Cost = 1 / (productivity * production_rate)
+fn calculate_marginal_cost(
+    current_workers: u32, 
+    slots: (u32, u32),
+    base_production_rate: Decimal
+) -> Decimal {
+    let productivity = calculate_marginal_productivity(current_workers, slots);
+    if productivity > dec!(0) {
+        dec!(1) / (productivity * base_production_rate)
+    } else {
+        dec!(1000000) // Infinite cost if no productivity
+    }
+}
+
 /// Check if village can afford a quantity at a given price
 fn can_afford_quantity(
     money: Decimal,
@@ -426,19 +456,22 @@ impl Strategy for GrowthStrategy {
 }
 
 // === TRADING STRATEGY ===
-/// Specializes in one resource and trades aggressively for others.
+/// Dynamic trading based on marginal cost analysis.
 ///
 /// # Philosophy
-/// Chooses specialization based on production slot efficiency. Allocates
-/// 85% of workers to specialized resource, trades surplus for needs.
-/// Minimal construction effort.
+/// Calculates the marginal cost of producing each resource based on
+/// current allocation and productivity. Sets prices slightly better than
+/// break-even to ensure profitable trades. Adjusts each tick based on
+/// production costs and market prices.
 ///
 /// # Performance
-/// - **Excels**: Active markets, high slot differentiation, trade-friendly scenarios
-/// - **Struggles**: Isolated play, market crashes, early game
+/// - **Excels**: Active markets, price discovery, efficient allocation
+/// - **Struggles**: Isolated play, extreme resource scarcity
 ///
-/// # Specialization
-/// Automatically chosen based on which resource has better production slots
+/// # Pricing
+/// - Break-even ratio = (marginal cost of X) / (marginal cost of Y)
+/// - Bids at 98% of break-even (slight profit when buying)
+/// - Asks at 102% of break-even (slight profit when selling)
 pub struct TradingStrategy {
     price_multiplier: Decimal,
     max_trade_fraction: Decimal,
@@ -473,78 +506,139 @@ impl Strategy for TradingStrategy {
         market: &MarketState,
     ) -> StrategyDecision {
         let worker_days = village.worker_days;
+        
+        // Base production rates (from actual simulation)
+        let base_food_rate = dec!(2.0);  // Food per worker-day
+        let base_wood_rate = dec!(0.1);  // Wood per worker-day
 
-        // Determine specialization based on production slots
-        let specialize_food = village.food_slots.0 > village.wood_slots.0
-            || (village.food_slots.0 == village.wood_slots.0
-                && village.food_slots.1 > village.wood_slots.1);
-
-        // Heavy specialization
-        let allocation = if specialize_food {
-            WorkerAllocation {
-                wood: worker_days * dec!(0.1),
-                food: worker_days * dec!(0.85),
-                construction: worker_days * dec!(0.05),
-            }
+        // Start with balanced allocation  
+        let construction_allocation = worker_days * dec!(0.1);
+        let remaining = worker_days - construction_allocation;
+        
+        // Calculate current marginal costs for initial balanced allocation
+        let food_workers_est = (remaining * dec!(0.5)).to_u32().unwrap_or(0);
+        let wood_workers_est = (remaining * dec!(0.5)).to_u32().unwrap_or(0);
+        
+        let food_marginal_cost = calculate_marginal_cost(
+            food_workers_est, 
+            (village.food_slots.0, village.food_slots.1),
+            base_food_rate
+        );
+        let wood_marginal_cost = calculate_marginal_cost(
+            wood_workers_est,
+            (village.wood_slots.0, village.wood_slots.1), 
+            base_wood_rate
+        );
+        
+        // Break-even exchange rate: How much wood is 1 food worth?
+        let wood_per_food_breakeven = food_marginal_cost / wood_marginal_cost;
+        
+        // Adjust allocation based on which resource is more valuable to produce
+        let (food_allocation, wood_allocation) = if food_marginal_cost < wood_marginal_cost {
+            // Food is cheaper to produce - allocate more to food
+            let food_weight = dec!(0.7);
+            let wood_weight = dec!(0.3);
+            (remaining * food_weight, remaining * wood_weight)
         } else {
-            WorkerAllocation {
-                wood: worker_days * dec!(0.85),
-                food: worker_days * dec!(0.1),
-                construction: worker_days * dec!(0.05),
-            }
+            // Wood is cheaper to produce - allocate more to wood
+            let food_weight = dec!(0.3);
+            let wood_weight = dec!(0.7);
+            (remaining * food_weight, remaining * wood_weight)
+        };
+        
+        let allocation = WorkerAllocation {
+            food: food_allocation,
+            wood: wood_allocation,
+            construction: construction_allocation,
         };
 
-        // Trading - aggressive buying and selling
+        // Trading based on marginal cost analysis
         let mut wood_bid = None;
         let mut wood_ask = None;
         let mut food_bid = None;
         let mut food_ask = None;
-
-        if specialize_food {
-            // Sell food aggressively
-            if village.food > dec!(20) {
-                let quantity = (village.food * self.max_trade_fraction)
-                    .to_u32()
-                    .unwrap_or(0)
-                    .min(100);
-                let price = calculate_food_ask_price(
-                    market.last_food_price,
-                    dec!(0.95) * self.price_multiplier,
-                );
-                food_ask = Some((price, quantity));
-            }
-
-            // Buy wood as needed
-            if village.wood < dec!(20) && village.money > dec!(10) {
-                let quantity = 30u32;
-                let price = calculate_wood_bid_price(
-                    market.last_wood_price,
-                    dec!(1.05) * self.price_multiplier,
-                );
-                wood_bid = Some((price, quantity));
+        
+        // Use market prices if available, otherwise use break-even ratio
+        let _market_wood_per_food = if let (Some(wood_price), Some(food_price)) = 
+            (market.last_wood_price, market.last_food_price) {
+            if food_price > dec!(0) {
+                wood_price / food_price
+            } else {
+                wood_per_food_breakeven
             }
         } else {
-            // Sell wood aggressively
-            if village.wood > dec!(10) {
-                let quantity = (village.wood * self.max_trade_fraction)
-                    .to_u32()
-                    .unwrap_or(0)
-                    .min(30);
-                let price = calculate_wood_ask_price(
-                    market.last_wood_price,
-                    dec!(0.95) * self.price_multiplier,
-                );
-                wood_ask = Some((price, quantity));
-            }
+            wood_per_food_breakeven
+        };
 
-            // Buy food as needed
-            if village.food < dec!(30) && village.money > dec!(10) {
-                let quantity = (village.workers as u32 * 20).min(100);
-                let price = calculate_food_bid_price(
-                    market.last_food_price,
-                    dec!(1.05) * self.price_multiplier,
-                );
-                food_bid = Some((price, quantity));
+        // Determine what to trade based on inventory and production efficiency
+        let food_days = calculate_resource_days(village.food, Decimal::from(village.workers));
+        let wood_days = calculate_resource_days(village.wood, Decimal::from(village.houses) * dec!(0.1));
+        
+        // If we have excess food and need wood
+        if food_days > 20 && wood_days < 15 && village.food > dec!(30) {
+            let quantity = (village.food * self.max_trade_fraction)
+                .to_u32()
+                .unwrap_or(0)
+                .min(50);
+            if quantity > 0 {
+                // Ask slightly above our break-even
+                let food_price = if let Some(market_price) = market.last_food_price {
+                    market_price * dec!(1.02) * self.price_multiplier
+                } else {
+                    // Convert break-even ratio to food price
+                    dec!(1.0) * dec!(1.02) * self.price_multiplier
+                };
+                food_ask = Some((food_price, quantity));
+            }
+        }
+        
+        // If we have excess wood and need food
+        if wood_days > 20 && food_days < 15 && village.wood > dec!(20) {
+            let quantity = (village.wood * self.max_trade_fraction)
+                .to_u32()
+                .unwrap_or(0)
+                .min(30);
+            if quantity > 0 {
+                // Ask slightly above our break-even
+                let wood_price = if let Some(market_price) = market.last_wood_price {
+                    market_price * dec!(1.02) * self.price_multiplier
+                } else {
+                    // Use break-even ratio
+                    wood_per_food_breakeven * dec!(1.02) * self.price_multiplier
+                };
+                wood_ask = Some((wood_price, quantity));
+            }
+        }
+        
+        // If we urgently need food
+        if food_days < 10 && village.money > dec!(20) {
+            let quantity = ((15 - food_days) * village.workers as u32).min(50);
+            if quantity > 0 {
+                // Bid slightly below market/break-even for profit
+                let food_price = if let Some(market_price) = market.last_food_price {
+                    market_price * dec!(0.98) * self.price_multiplier
+                } else {
+                    dec!(1.0) * dec!(0.98) * self.price_multiplier
+                };
+                if can_afford_quantity(village.money, food_price, quantity, dec!(0.2)) {
+                    food_bid = Some((food_price, quantity));
+                }
+            }
+        }
+        
+        // If we urgently need wood
+        if wood_days < 10 && village.money > dec!(20) {
+            let quantity = (15 - wood_days).min(20);
+            if quantity > 0 {
+                // Bid slightly below market/break-even for profit
+                let wood_price = if let Some(market_price) = market.last_wood_price {
+                    market_price * dec!(0.98) * self.price_multiplier  
+                } else {
+                    wood_per_food_breakeven * dec!(0.98) * self.price_multiplier
+                };
+                if can_afford_quantity(village.money, wood_price, quantity, dec!(0.2)) {
+                    wood_bid = Some((wood_price, quantity));
+                }
             }
         }
 

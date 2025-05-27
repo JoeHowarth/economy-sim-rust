@@ -85,6 +85,9 @@ fn event_matches_type(event_type: &EventType, type_str: &str) -> bool {
         EventType::HouseDecayed { .. } => {
             type_lower.contains("decay") || type_lower.contains("house")
         }
+        EventType::AuctionCleared { .. } => {
+            type_lower.contains("auction") || type_lower.contains("clear") || type_lower.contains("market")
+        }
     }
 }
 
@@ -139,6 +142,7 @@ pub fn format_query_results(events: &[Event], verbose: bool) -> String {
             EventType::HouseCompleted { .. } => "HouseCompleted",
             EventType::VillageStateSnapshot { .. } => "VillageStateSnapshot",
             EventType::HouseDecayed { .. } => "HouseDecayed",
+            EventType::AuctionCleared { .. } => "AuctionCleared",
         };
         *type_counts.entry(type_name).or_insert(0) += 1;
     }
@@ -249,6 +253,10 @@ fn format_event_details(event_type: &EventType) -> String {
         EventType::HouseDecayed { house_id, .. } => {
             format!("House {} decayed", house_id)
         }
+        EventType::AuctionCleared { wood_price, food_price, wood_volume, food_volume, .. } => {
+            format!("Auction cleared - Wood: {} @ {:?}, Food: {} @ {:?}", 
+                wood_volume, wood_price, food_volume, food_price)
+        }
     }
 }
 
@@ -276,6 +284,7 @@ pub fn export_to_csv(events: &[Event], output: &Path) -> Result<(), String> {
             EventType::HouseCompleted { .. } => "HouseCompleted",
             EventType::VillageStateSnapshot { .. } => "VillageStateSnapshot",
             EventType::HouseDecayed { .. } => "HouseDecayed",
+            EventType::AuctionCleared { .. } => "AuctionCleared",
         };
 
         let details = format_event_details(&event.event_type);

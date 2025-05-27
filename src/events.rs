@@ -69,6 +69,13 @@ pub enum EventType {
         wood: Decimal,
         money: Decimal,
     },
+    AuctionCleared {
+        wood_price: Option<Decimal>,
+        food_price: Option<Decimal>,
+        wood_volume: u64,
+        food_volume: u64,
+        total_participants: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +213,19 @@ impl fmt::Display for Event {
                     f,
                     "State - Pop:{} Houses:{} Food:{} Wood:{} Money:{}",
                     population, houses, food, wood, money
+                )
+            }
+            EventType::AuctionCleared {
+                wood_price,
+                food_price,
+                wood_volume,
+                food_volume,
+                total_participants,
+            } => {
+                write!(
+                    f,
+                    "Auction cleared - Wood: {} @ {:?}, Food: {} @ {:?}, {} participants",
+                    wood_volume, wood_price, food_volume, food_price, total_participants
                 )
             }
         }
