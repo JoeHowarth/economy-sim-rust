@@ -1,0 +1,46 @@
+name: "Strategy Comparison on Trading Specialization"
+description: "Compare all strategies on the trading specialization scenario"
+parallel: 3
+
+experiments:
+  - name: "trading_all"
+    scenario: "scenarios/trading_specialization.json"
+    strategies: ["trading", "trading", "trading"]
+    output: "results/trading_all.json"
+    overrides:
+      random_seed: 12345
+
+  - name: "balanced_all"
+    scenario: "scenarios/trading_specialization.json"
+    strategies: ["balanced", "balanced", "balanced"]
+    output: "results/balanced_all.json"
+    overrides:
+      random_seed: 12345
+
+  - name: "growth_all"
+    scenario: "scenarios/trading_specialization.json"
+    strategies: ["growth", "growth", "growth"]
+    output: "results/growth_all.json"
+    overrides:
+      random_seed: 12345
+
+  - name: "survival_all"
+    scenario: "scenarios/trading_specialization.json"
+    strategies: ["survival", "survival", "survival"]
+    output: "results/survival_all.json"
+    overrides:
+      random_seed: 12345
+
+  - name: "greedy_all"
+    scenario: "scenarios/trading_specialization.json"
+    strategies: ["greedy", "greedy", "greedy"]
+    output: "results/greedy_all.json"
+    overrides:
+      random_seed: 12345
+
+  - name: "mixed_strategies"
+    scenario: "scenarios/trading_specialization.json"
+    strategies: ["growth", "trading", "balanced"]
+    output: "results/mixed_strategies.json"
+    overrides:
+      random_seed: 12345

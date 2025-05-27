@@ -1,0 +1,10 @@
+simulation,village_id,strategy,growth_multiplier,final_population,trade_profit,efficiency
+"trading_strategy.json","wood_specialist","unknown",0.067,1,-299.03,0.061
+"trading_strategy.json","food_specialist","unknown",2.733,41,652.70,2.456
+"trading_strategy.json","balanced_trader","unknown",0.100,1,-353.67,0.077
+"balanced_strategy.json","wood_specialist","unknown",0.667,10,105.00,0.753
+"balanced_strategy.json","balanced_trader","unknown",3.100,31,15.75,1.623
+"balanced_strategy.json","food_specialist","unknown",1.067,16,-120.75,1.102
+"growth_strategy.json","food_specialist","unknown",3.467,52,-260.00,1.878
+"growth_strategy.json","wood_specialist","unknown",0.867,13,260.00,0.893
+"growth_strategy.json","balanced_trader","unknown",3.900,39,0.00,1.796

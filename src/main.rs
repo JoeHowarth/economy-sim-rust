@@ -43,10 +43,13 @@ use village_model::{
     analysis::{analyze_simulation, compare_simulations, explain_simulation},
     auction::{FinalFill, run_auction},
     auction_builder::AuctionBuilder,
+    batch_analysis::{analyze_batch, export_batch_to_csv},
     cli::{Command, apply_overrides, parse_args, validate_scenario},
     core::{Allocation, House, Village, Worker},
     events::{ConsumptionPurpose, DeathCause, EventLogger, EventType, TradeSide},
+    experiment::ExperimentBatch,
     metrics::MetricsCalculator,
+    query::{export_to_csv as export_query_to_csv, format_query_results, query_events},
     scenario::{VillageConfig, create_standard_scenarios},
     strategies,
     types::{OrderRequest, ResourceType, ResourceTypeExt, VillageId},
@@ -822,6 +825,128 @@ fn main() {
                 process::exit(1);
             }
         },
+        Command::Batch { config } => {
+            match ExperimentBatch::load_from_file(&config) {
+                Ok(batch) => {
+                    println!("Running {} experiments", batch.experiments.len());
+                    if let Some(parallel) = batch.parallel {
+                        println!("Parallel execution with {} threads", parallel);
+                    }
+
+                    let results = batch.run(args.quiet);
+
+                    // Print summary
+                    let successful = results.iter().filter(|r| r.success).count();
+                    println!("\n=== Experiment Results ===");
+                    println!(
+                        "Total: {} | Success: {} | Failed: {}",
+                        results.len(),
+                        successful,
+                        results.len() - successful
+                    );
+
+                    for result in &results {
+                        if result.success {
+                            println!("✓ {} ({} ms)", result.name, result.duration_ms);
+                        } else {
+                            println!(
+                                "✗ {} - {}",
+                                result.name,
+                                result
+                                    .error
+                                    .as_ref()
+                                    .unwrap_or(&"Unknown error".to_string())
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error loading experiment batch: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        Command::AnalyzeBatch { files, output } => {
+            match analyze_batch(&files) {
+                Ok(report) => {
+                    // Print summary
+                    println!("\n=== Batch Analysis Report ===");
+                    println!("Analyzed {} simulations", report.simulations.len());
+                    println!("\nAggregate Statistics:");
+                    println!(
+                        "  Mean Growth Rate: {:+.1}% (σ={:.1}%)",
+                        report.aggregate_stats.mean_growth_rate * 100.0,
+                        report.aggregate_stats.std_growth_rate * 100.0
+                    );
+                    println!(
+                        "  Mean Survival Rate: {:.1}% (σ={:.1}%)",
+                        report.aggregate_stats.mean_survival_rate * 100.0,
+                        report.aggregate_stats.std_survival_rate * 100.0
+                    );
+                    println!(
+                        "  Mean Trade Volume: {:.1}",
+                        report.aggregate_stats.mean_trade_volume
+                    );
+                    println!(
+                        "  Mean Gini Coefficient: {:.3}",
+                        report.aggregate_stats.mean_gini
+                    );
+
+                    if !report.strategy_performance.is_empty() {
+                        println!("\nStrategy Performance:");
+                        for (strategy, stats) in &report.strategy_performance {
+                            println!(
+                                "  {}: {:.1}% growth (n={})",
+                                strategy,
+                                stats.mean_growth * 100.0,
+                                stats.occurrences
+                            );
+                        }
+                    }
+
+                    if !report.insights.is_empty() {
+                        println!("\nInsights:");
+                        for insight in &report.insights {
+                            println!("  - {}", insight);
+                        }
+                    }
+
+                    // Export to CSV if requested
+                    if let Some(output_path) = output {
+                        match export_batch_to_csv(&report, &output_path) {
+                            Ok(_) => println!("\nResults exported to {}", output_path.display()),
+                            Err(e) => eprintln!("Error exporting to CSV: {}", e),
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error analyzing batch: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        Command::Query { file, filters } => {
+            match query_events(&file, &filters) {
+                Ok(events) => {
+                    let output = format_query_results(&events, args.verbose);
+                    println!("{}", output);
+
+                    // Export to CSV if output file specified
+                    if let Some(output_path) = args.output_file {
+                        match export_query_to_csv(&events, &output_path) {
+                            Ok(_) => {
+                                println!("\nQuery results exported to {}", output_path.display())
+                            }
+                            Err(e) => eprintln!("Error exporting to CSV: {}", e),
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error querying events: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
     }
 }
 
@@ -877,9 +1002,10 @@ fn run_simulation(args: village_model::cli::CliArgs) {
     apply_overrides(&mut scenario, &args);
 
     // Validate scenario configuration
-    validate_scenario(&scenario, &args);
-
-    println!("{}", scenario);
+    if !args.quiet {
+        validate_scenario(&scenario, &args);
+        println!("{}", scenario);
+    }
 
     // Initialize villages from scenario
     let mut villages: Vec<Village> = scenario
@@ -916,7 +1042,9 @@ fn run_simulation(args: village_model::cli::CliArgs) {
         .collect();
 
     // Print villages with their strategies
-    println!("\nVillages with strategies:");
+    if !args.quiet {
+        println!("\nVillages with strategies:");
+    }
 
     // Create strategies for each village
     let strategies: Vec<StrategyAdapter> = if args.strategies.is_empty() {
@@ -926,7 +1054,9 @@ fn run_simulation(args: village_model::cli::CliArgs) {
             .enumerate()
             .map(|(i, v)| {
                 let strategy = strategies::create_strategy(&scenario.villages[i].strategy);
-                println!("  {}: {} (from scenario)", v.id_str, strategy.name());
+                if !args.quiet {
+                    println!("  {}: {} (from scenario)", v.id_str, strategy.name());
+                }
                 StrategyAdapter::new(strategy)
             })
             .collect()
@@ -937,7 +1067,9 @@ fn run_simulation(args: village_model::cli::CliArgs) {
             .enumerate()
             .map(|(i, v)| {
                 let strategy_name = &args.strategies[i % args.strategies.len()];
-                println!("  {}: {}", v.id_str, strategy_name);
+                if !args.quiet {
+                    println!("  {}: {}", v.id_str, strategy_name);
+                }
                 let strategy = strategies::create_strategy_by_name(strategy_name);
                 StrategyAdapter::new(strategy)
             })
@@ -1031,7 +1163,9 @@ fn run_simulation(args: village_model::cli::CliArgs) {
 
         // Check for early termination if all villages have died
         if villages.iter().all(|v| v.workers.is_empty()) {
-            println!("All villages have died at tick {}", tick);
+            if !args.quiet {
+                println!("All villages have died at tick {}", tick);
+            }
             break;
         }
     }
@@ -1043,7 +1177,9 @@ fn run_simulation(args: village_model::cli::CliArgs) {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "simulation_events.json".to_string());
     logger.save_to_file(&filename).unwrap();
-    println!("\nEvents saved to {}", filename);
+    if !args.quiet {
+        println!("\nEvents saved to {}", filename);
+    }
 
     // Calculate and display metrics
     let metrics = MetricsCalculator::calculate_scenario_metrics(
@@ -1052,11 +1188,13 @@ fn run_simulation(args: village_model::cli::CliArgs) {
         scenario.parameters.days_to_simulate,
     );
 
-    println!("\n{}", metrics);
+    if !args.quiet {
+        println!("\n{}", metrics);
 
-    // Display individual village metrics
-    for village_metrics in metrics.villages.values() {
-        println!("\n{}", village_metrics);
+        // Display individual village metrics
+        for village_metrics in metrics.villages.values() {
+            println!("\n{}", village_metrics);
+        }
     }
 }
 

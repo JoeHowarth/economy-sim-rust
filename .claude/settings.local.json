@@ -23,7 +23,8 @@
       "Bash(python3:*)",
       "Bash(jq:*)",
       "Bash(./target/release/village-model-sim --help)",
-      "Bash(./target/release/village-model-sim:*)"
+      "Bash(./target/release/village-model-sim:*)",
+      "Bash(cargo:*)"
     ],
     "deny": []
   }

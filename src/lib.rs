@@ -1,10 +1,13 @@
 pub mod analysis;
 pub mod auction;
 pub mod auction_builder;
+pub mod batch_analysis;
 pub mod cli;
 pub mod core;
 pub mod events;
+pub mod experiment;
 pub mod metrics;
+pub mod query;
 pub mod scenario;
 pub mod strategies;
 pub mod types;

@@ -82,3 +82,6 @@ This is a Rust-based economic simulation of village resource management and trad
 - Building: 10 wood + 60 worker-days
 - Capacity: 5 workers when maintained
 - Maintenance level decreases daily, reducing capacity when negative
+
+## Git Guidelines
+- Use git effectively. Do not make 'backup' files

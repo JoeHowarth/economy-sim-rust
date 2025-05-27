@@ -20,16 +20,45 @@ pub struct CliArgs {
     pub initial_money: Option<Decimal>,
     pub debug: bool,
     pub verbose: bool,
+    pub quiet: bool,
     pub output_file: Option<PathBuf>,
+    pub debug_decisions: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Run,
-    Ui { file: PathBuf },
-    Analyze { file: PathBuf },
-    Compare { files: Vec<PathBuf> },
-    Explain { file: PathBuf },
+    Ui {
+        file: PathBuf,
+    },
+    Analyze {
+        file: PathBuf,
+    },
+    Compare {
+        files: Vec<PathBuf>,
+    },
+    Explain {
+        file: PathBuf,
+    },
+    Batch {
+        config: PathBuf,
+    },
+    AnalyzeBatch {
+        files: Vec<PathBuf>,
+        output: Option<PathBuf>,
+    },
+    Query {
+        file: PathBuf,
+        filters: QueryFilters,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct QueryFilters {
+    pub village: Option<String>,
+    pub event_type: Option<String>,
+    pub tick_range: Option<(usize, usize)>,
+    pub resource: Option<String>,
 }
 
 impl Default for CliArgs {
@@ -47,7 +76,9 @@ impl Default for CliArgs {
             initial_money: None,
             debug: false,
             verbose: false,
+            quiet: false,
             output_file: None,
+            debug_decisions: None,
         }
     }
 }
@@ -60,6 +91,11 @@ pub fn parse_args() -> Result<CliArgs, lexopt::Error> {
     let mut analyze_file = None;
     let mut explain_file = None;
     let mut compare_files = Vec::new();
+    let mut batch_config = None;
+    let mut analyze_batch_files = Vec::new();
+    let mut analyze_batch_output = None;
+    let mut query_file = None;
+    let mut query_filters = QueryFilters::default();
 
     while let Some(arg) = args.next()? {
         match arg {
@@ -73,6 +109,9 @@ pub fn parse_args() -> Result<CliArgs, lexopt::Error> {
                         Some("analyze") => analyze_file = Some(PathBuf::from(val_str)),
                         Some("explain") => explain_file = Some(PathBuf::from(val_str)),
                         Some("compare") => compare_files.push(PathBuf::from(val_str)),
+                        Some("batch") => batch_config = Some(PathBuf::from(val_str)),
+                        Some("analyze-batch") => analyze_batch_files.push(PathBuf::from(val_str)),
+                        Some("query") => query_file = Some(PathBuf::from(val_str)),
                         _ => {}
                     }
                 }
@@ -124,9 +163,46 @@ pub fn parse_args() -> Result<CliArgs, lexopt::Error> {
             }
             Long("debug") => cli_args.debug = true,
             Long("verbose") | Short('v') => cli_args.verbose = true,
+            Long("quiet") | Short('q') => cli_args.quiet = true,
+            Long("debug-decisions") => {
+                if let Some(Value(val)) = args.next()? {
+                    cli_args.debug_decisions = Some(val.string()?);
+                }
+            }
             Long("output") | Short('o') => {
                 if let Some(Value(val)) = args.next()? {
-                    cli_args.output_file = Some(PathBuf::from(val.string()?));
+                    let path = PathBuf::from(val.string()?);
+                    if subcommand.as_deref() == Some("analyze-batch") {
+                        analyze_batch_output = Some(path);
+                    } else {
+                        cli_args.output_file = Some(path);
+                    }
+                }
+            }
+            Long("village") => {
+                if let Some(Value(val)) = args.next()? {
+                    query_filters.village = Some(val.string()?);
+                }
+            }
+            Long("event-type") => {
+                if let Some(Value(val)) = args.next()? {
+                    query_filters.event_type = Some(val.string()?);
+                }
+            }
+            Long("resource") => {
+                if let Some(Value(val)) = args.next()? {
+                    query_filters.resource = Some(val.string()?);
+                }
+            }
+            Long("tick-range") => {
+                if let Some(Value(val)) = args.next()? {
+                    let range_str = val.string()?;
+                    if let Some((start, end)) = range_str.split_once('-') {
+                        match (start.parse::<usize>(), end.parse::<usize>()) {
+                            (Ok(s), Ok(e)) => query_filters.tick_range = Some((s, e)),
+                            _ => return Err(lexopt::Error::from("Invalid tick range format")),
+                        }
+                    }
                 }
             }
             Long("help") | Short('h') => {
@@ -157,6 +233,35 @@ pub fn parse_args() -> Result<CliArgs, lexopt::Error> {
         Some("explain") => Command::Explain {
             file: explain_file.unwrap_or_else(|| PathBuf::from("simulation_events.json")),
         },
+        Some("batch") => {
+            if let Some(config) = batch_config {
+                Command::Batch { config }
+            } else {
+                eprintln!("Error: batch command requires a configuration file");
+                std::process::exit(1);
+            }
+        }
+        Some("analyze-batch") => {
+            if analyze_batch_files.is_empty() {
+                eprintln!("Error: analyze-batch command requires at least one file");
+                std::process::exit(1);
+            }
+            Command::AnalyzeBatch {
+                files: analyze_batch_files,
+                output: analyze_batch_output,
+            }
+        }
+        Some("query") => {
+            if let Some(file) = query_file {
+                Command::Query {
+                    file,
+                    filters: query_filters,
+                }
+            } else {
+                eprintln!("Error: query command requires a file");
+                std::process::exit(1);
+            }
+        }
         Some("run") | None => Command::Run,
         Some(cmd) => {
             eprintln!("Unknown command: {}", cmd);
@@ -258,7 +363,10 @@ fn print_help() {
     println!("    ui [FILE]        View simulation events in TUI");
     println!("    analyze [FILE]   Analyze simulation results");
     println!("    compare FILE...  Compare multiple simulation results");
-    println!("    explain [FILE]   Generate narrative explanation of events\n");
+    println!("    explain [FILE]   Generate narrative explanation of events");
+    println!("    batch CONFIG     Run batch experiments from YAML config");
+    println!("    analyze-batch FILE... [-o OUTPUT]  Analyze multiple results and export");
+    println!("    query FILE [OPTIONS]  Query and filter simulation events\n");
 
     println!("SIMULATION OPTIONS:");
     println!("    -s, --strategy <NAME>      Strategy for villages (can be used multiple times)");
@@ -277,7 +385,15 @@ fn print_help() {
     println!("    -o, --output <FILE>        Output events to specified file");
     println!("    --debug                    Enable debug output");
     println!("    -v, --verbose              Enable verbose output");
+    println!("    -q, --quiet                Suppress non-essential output");
+    println!("    --debug-decisions <ID>     Debug strategy decisions for specific village");
     println!("    -h, --help                 Print help information\n");
+
+    println!("QUERY OPTIONS:");
+    println!("    --village <ID>             Filter by village ID");
+    println!("    --event-type <TYPE>        Filter by event type");
+    println!("    --resource <TYPE>          Filter by resource type (food/wood)");
+    println!("    --tick-range <START-END>   Filter by tick range (e.g., 0-100)\n");
 
     println!("UI CONTROLS:");
     println!("    Space            Pause/Resume playback");
